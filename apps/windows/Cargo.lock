@@ -1118,6 +1118,7 @@ dependencies = [
 [[package]]
 name = "dfn3_rs"
 version = "0.1.2"
+source = "git+https://github.com/zalikuska/dfn3_rs?rev=fb626d6d980913f167259b4273949a9d9fb6f275#fb626d6d980913f167259b4273949a9d9fb6f275"
 dependencies = [
  "realfft",
 ]
@@ -6655,7 +6656,7 @@ dependencies = [
 
 [[package]]
 name = "zali_messenger_win"
-version = "0.2.72"
+version = "0.2.78"
 dependencies = [
  "base64 0.22.1",
  "block",

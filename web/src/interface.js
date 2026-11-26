@@ -4,6 +4,12 @@ const API_VERSION_PREFIX = '/api';
 const AUTH_REQUEST_TIMEOUT_MS = 6500;
 const SESSION_RESTORE_TIMEOUT_MS = 12000;
 const API_REQUEST_TIMEOUT_MS = 8000;
+// Текст ошибки «сервер недостижим» для показа пользователю. Нативные шеллы отдают
+// сырые сообщения стека: Android/OkHttp — «Failed to connect to host/ip», iOS/WKWebView —
+// «load failed», браузер — «failed to fetch». Раньше «Failed to connect» не узнавался
+// и в форме входа показывался как есть. Для повторных попыток не использовать: нативный
+// слой уже сам ретраит, второй ретрай удвоил бы ожидание.
+const NETWORK_FAILURE_TEXT_RE = /load failed|failed to fetch|network error|abort|failed to connect|unable to resolve|unreachable|connection (refused|reset|failed)|timed out|timeout|не удалось связаться/i;
 // Bulk transfers — an upload of a multipart body, or a download of a `.zali`
 // archive / avatar / server asset — are the requests whose honest duration is
 // measured in megabytes rather than round trips. They get their own ceiling

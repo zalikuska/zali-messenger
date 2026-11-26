@@ -107,7 +107,7 @@ ZaliMixin(ZaliInterface, class {
 
     networkErrorText(e, fallback) {
         const msg = String(e?.message || e || '');
-        return /load failed|failed to fetch|network|abort|timed out|не удалось связаться/i.test(msg)
+        return NETWORK_FAILURE_TEXT_RE.test(msg) || /network/i.test(msg)
             ? 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.'
             : (msg || fallback);
     }

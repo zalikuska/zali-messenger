@@ -891,7 +891,7 @@ ZaliMixin(ZaliInterface, class {
             return true;
         } catch (e) {
             const raw = e.message || 'Ошибка входа';
-            const networkFailure = /load failed|failed to fetch|network error|abort/i.test(raw);
+            const networkFailure = NETWORK_FAILURE_TEXT_RE.test(raw);
             const friendly = networkFailure
                 ? 'Не удалось связаться с сервером. Проверьте интернет или адрес в разделе «Свой сервер» ниже.'
                 : raw;
@@ -1437,7 +1437,7 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {
             const apiBase = this.getApiBaseUrl();
             const rawMessage = String(e?.message || 'Не удалось добавить контакт');
-            const message = /load failed|failed to fetch|network error|abort/i.test(rawMessage)
+            const message = NETWORK_FAILURE_TEXT_RE.test(rawMessage)
                 ? `Не удалось добавить контакт на ${apiBase}. Проверь адрес сервера и попробуй ещё раз.`
                 : rawMessage;
             this.setContactStatus(message, 'error');
@@ -1483,7 +1483,7 @@ ZaliMixin(ZaliInterface, class {
         const raw = String(error?.message || error || '').trim();
         const status = Number(error?.status || 0);
         const timedOut = /timed out|timeout|время ожидания/i.test(raw);
-        const offline = /load failed|failed to fetch|network error|abort|не удалось связаться|connection|offline/i.test(raw);
+        const offline = NETWORK_FAILURE_TEXT_RE.test(raw) || /connection|offline/i.test(raw);
         const server = status >= 500;
         const registering = mode === 'register';
         if (offline || timedOut || server) {
