@@ -15,7 +15,9 @@ const check = (n, ok, failDetail = '', passDetail = '') => (ok ? pass(n, passDet
 
 const source = fs.readFileSync(new URL('../../web/service-worker.js', import.meta.url), 'utf8');
 
-function loadWorker() {
+// appRoot — значение APP_ROOT: './' как есть или '/web/' для копии в корне домена,
+// которую делает scripts/build_site_dist.py (скрипт в /service-worker.js, клиент в /web/).
+function loadWorker({ appRoot = './', scriptUrl = 'https://msg.example/service-worker.js' } = {}) {
     const listeners = {};
     const shown = [];
     const center = [];
@@ -33,17 +35,20 @@ function loadWorker() {
     };
     const self = {
         registration,
+        location: new URL(scriptUrl),
         addEventListener: (type, fn) => { listeners[type] = fn; },
         skipWaiting: async () => {},
         clients: {
-            matchAll: async () => clients,
+            matchAll: async () => clients.map(client => ({ url: 'https://msg.example/', ...client })),
             openWindow: async (url) => { opened.push(url); },
             claim: async () => {},
         },
     };
     const sandbox = { self, caches: {}, fetch: async () => ({}), URL, console, Promise };
     vm.createContext(sandbox);
-    vm.runInContext(source, sandbox, { filename: 'web/service-worker.js' });
+    const patched = source.replace("const APP_ROOT = './'; // @app-root", `const APP_ROOT = ${JSON.stringify(appRoot)}; // @app-root`);
+    if (appRoot !== './' && patched === source) throw new Error('маркер @app-root пропал из web/service-worker.js');
+    vm.runInContext(patched, sandbox, { filename: 'web/service-worker.js' });
 
     const fire = async (type, event) => {
         let pending = null;
@@ -114,8 +119,36 @@ async function clickRouting() {
         `открыто ${noTab.opened[0] || 'ничего'}`, noTab.opened[0]);
 }
 
+// Клиент в /web/, скрипт в корне домена: сайт на корне не должен ни получать фокус
+// по клику на уведомление, ни открываться вместо приложения.
+async function rootScript() {
+    console.log('\n──────── скрипт в корне домена, клиент в /web/\n');
+    const opts = { appRoot: '/web/' };
+    const site = loadWorker(opts);
+    const siteMessages = [];
+    let siteFocused = 0;
+    site.clients.push({ url: 'https://msg.example/', focus: async () => { siteFocused += 1; }, postMessage: (m) => siteMessages.push(m) });
+    await site.click({ sender: 'alice', serverId: null, channelId: null, messageId: 'm1' });
+    check('открытая страница сайта не получает ни фокус, ни переписку',
+        siteFocused === 0 && siteMessages.length === 0, `focus=${siteFocused}, сообщений ${siteMessages.length}`, 'сайт не тронут');
+    const opened = site.opened[0] ? new URL(site.opened[0]) : null;
+    check('вместо неё открывается приложение в /web/, сразу в переписку',
+        opened?.pathname === '/web/' && JSON.parse(opened.searchParams.get('open') || '{}').sender === 'alice',
+        `открыто ${site.opened[0] || 'ничего'}`, site.opened[0]);
+
+    const app = loadWorker(opts);
+    const appMessages = [];
+    let appFocused = 0;
+    app.clients.push({ url: 'https://msg.example/web/', focus: async () => { appFocused += 1; }, postMessage: (m) => appMessages.push(m) });
+    await app.click({ sender: '', serverId: 's1', channelId: 'c1', messageId: 'm2' });
+    check('открытое окно приложения в /web/ получает переписку и фокус',
+        appFocused === 1 && appMessages[0]?.type === 'zali:open-conversation' && app.opened.length === 0,
+        `focus=${appFocused}, открыто ${app.opened.length}`, 'фокус без нового окна');
+}
+
 await dedupe();
 await clickRouting();
+await rootScript();
 
 console.log(`\n  итог: ${checks} проверок, ${failures} нарушено`);
 process.exit(failures ? 1 : 0);

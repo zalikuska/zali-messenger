@@ -18,9 +18,12 @@
     <script>
     // Страница, открытая по адресу …/server/<код> или …/profile/<имя>, лежит на
     // глубине в один сегмент: без <base> относительные style.css/app.js
-    // искались бы в /server/. Нативные оболочки (zali://, file://) сюда не попадают.
-    if (/^https?:$/.test(location.protocol) && /^\/(server|profile)\//.test(location.pathname)) {
-        document.write('<base href="/">');
+    // искались бы в /server/. Корень — всё, что стоит перед этим сегментом: «/» на
+    // корне хоста, «/web/» на msg.zalikus.org/web/server/<код>. Нативные оболочки
+    // (zali://, file://) сюда не попадают.
+    var deep = /^https?:$/.test(location.protocol) && /^(\/(?:[\w.-]+\/)*?)(?:server|profile)\//.exec(location.pathname);
+    if (deep) {
+        document.write('<base href="' + deep[1] + '">');
     }
     </script>
     <script>

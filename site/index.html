@@ -1,0 +1,1282 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Zali Messenger</title>
+<meta name="description" content="Zali — переписки, сообщества и звонки в одном приложении. Личные сообщения шифруются на устройствах, для регистрации нужны только ник и пароль. macOS, Windows, Android и браузер.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#090b0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ecebe6" media="(prefers-color-scheme: light)">
+<meta property="og:title" content="Zali Messenger">
+<meta property="og:description" content="Переписки, сообщества и звонки в одном приложении. Скачать или открыть в браузере.">
+<meta property="og:image" content="logo.svg">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="icon" href="icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+/* ════════════════════════════════════════════════════════════════════════
+   Лендинг Zali. Язык — «Фокус» из docs/UI_GUIDELINES.md без слоя свечения:
+   глубина тоном (surface → fill → fill-strong), без рамок, теней и ореолов
+   на статичных панелях; лайм — только сплошным пятном главного действия и
+   «моего» или глифом на нейтральной плитке. Тёмная — исходная, светлая — «бумага».
+   ════════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #090b0e;
+  --bg-rgb: 9,11,14;
+  --ink-rgb: 255,255,255;
+  --surface-rgb: 17,19,24;
+  --accent-rgb: 203,255,0;
+  --accent: rgb(var(--accent-rgb));
+  --accent-fg: #cbff00;
+  --on-accent: #050505;
+  --text: #f2f2f2;
+  --text2: rgba(var(--ink-rgb), .65);
+  --meta: .45;
+  --danger: #ff6b6f;
+  --f-surface: rgba(var(--ink-rgb), .032);
+  --f-fill: rgba(var(--ink-rgb), .065);
+  --f-fill-hover: rgba(var(--ink-rgb), .095);
+  --f-fill-strong: rgba(var(--ink-rgb), .11);
+  --f-hairline: rgba(var(--ink-rgb), .07);
+  --accent-edge: transparent;
+  --sheet-shadow: none;
+  --pop-shadow: 0 16px 40px rgba(0,0,0,.4);
+  --float-shadow: 0 22px 54px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+  --ease-out: cubic-bezier(.22,1,.36,1);
+  --spring: cubic-bezier(.34,1.56,.64,1);
+  --gutter: 32px;
+  --maxw: 1140px;
+  color-scheme: dark;
+}
+/* Тема — только системная: страница следует настройке ОС/браузера и
+   перекрашивается на лету, без ручного переключателя и сохранённого выбора. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ecebe6; --bg-rgb: 236,235,230; --ink-rgb: 40,38,33; --surface-rgb: 248,247,243;
+    --accent-rgb: 182,234,0; --accent-fg: #4d6900; --on-accent: #172000; --text: #1d1c19;
+    --text2: rgba(var(--ink-rgb), .7); --meta: .62; --danger: #c8333a;
+    --f-surface: rgb(var(--surface-rgb)); --f-fill: rgba(var(--ink-rgb), .06);
+    --f-fill-hover: rgba(var(--ink-rgb), .09); --f-fill-strong: rgba(var(--ink-rgb), .12);
+    --accent-edge: rgba(var(--ink-rgb), .05);
+    --sheet-shadow: 0 1px 2px rgba(60,50,30,.06), 0 8px 24px rgba(60,50,30,.06);
+    --pop-shadow: 0 1px 2px rgba(60,50,30,.08), 0 14px 36px rgba(60,50,30,.16);
+    --float-shadow: 0 1px 2px rgba(60,50,30,.08), 0 18px 44px rgba(60,50,30,.14);
+    color-scheme: light;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; scroll-padding-top: 80px; }
+body {
+  margin: 0; color: var(--text);
+  background: radial-gradient(1100px 620px at 8% -8%, rgba(var(--accent-rgb), .07), transparent 60%), var(--bg);
+  background-repeat: no-repeat;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+a { color: inherit; text-decoration: none; }
+a:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 3px; border-radius: 8px; }
+button { font: inherit; color: inherit; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition-duration: .01ms !important; }
+}
+img, svg { display: block; }
+.wrap { width: 100%; max-width: calc(var(--maxw) + var(--gutter) * 2); margin: 0 auto; padding: 0 var(--gutter); }
+.num { font-variant-numeric: tabular-nums; }
+.link { color: var(--accent-fg); font-weight: 600; }
+.link:hover { text-decoration: underline; text-underline-offset: 3px; }
+code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .9em; padding: 1px 6px; border-radius: 6px; background: var(--f-fill); }
+
+/* ── Кнопки ───────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  height: 52px; padding: 0 22px; border: 0; border-radius: 14px;
+  font-size: 15.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  transition: background .15s var(--ease-out), filter .15s var(--ease-out), transform .2s var(--ease-out);
+}
+.btn svg { width: 19px; height: 19px; flex: none; }
+.btn:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22); }
+.btn-primary { background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 1px var(--accent-edge); }
+.btn-primary:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.btn:active { transform: scale(.98); }
+.btn-primary .btn-lines { display: grid; line-height: 1.15; text-align: left; }
+.btn-primary .btn-lines small { font-size: 12px; font-weight: 600; opacity: .65; }
+.btn-ghost { background: var(--f-fill); color: var(--text); }
+.btn-ghost:hover { background: var(--f-fill-hover); }
+.btn-ghost .go { opacity: var(--meta); }
+.btn-sm { height: 36px; padding: 0 14px; border-radius: 10px; font-size: 13.5px; gap: 7px; }
+.btn-sm svg { width: 15px; height: 15px; }
+
+/* ── Шапка ────────────────────────────────────────────────────────────── */
+.nav { position: sticky; top: 0; z-index: 50; background: rgba(var(--bg-rgb), .92); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.nav.scrolled { box-shadow: 0 1px 0 var(--f-hairline); }
+.nav-in { display: flex; align-items: center; gap: 24px; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 17px; letter-spacing: -.01em; }
+.brand img { width: 30px; height: 30px; border-radius: 9px; }
+.nav-links { display: flex; gap: 2px; }
+.nav-links a { padding: 7px 11px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--text2); }
+.nav-links a:hover, .nav-links a[aria-current="true"] { background: var(--f-fill); color: var(--text); }
+.nav-cta { display: flex; gap: 8px; margin-left: auto; }
+
+/* ── Первый экран ─────────────────────────────────────────────────────── */
+.hero { padding: 64px 0 96px; }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 56px; align-items: center; }
+.ver { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px 0 5px; border-radius: 999px; background: var(--f-fill); font-size: 13px; font-weight: 600; color: var(--text2); margin-bottom: 22px; }
+.ver b { height: 20px; padding: 0 8px; border-radius: 999px; background: var(--f-fill-strong); color: var(--text); font-size: 12px; font-weight: 700; display: inline-grid; place-items: center; }
+.ver:hover { background: var(--f-fill-hover); }
+.ver[hidden] { display: none; }
+h1 { margin: 0 0 20px; font-size: clamp(36px, 4.2vw, 54px); line-height: 1.04; font-weight: 800; letter-spacing: -.035em; text-wrap: balance; }
+.lead { margin: 0 0 30px; font-size: 18px; line-height: 1.55; color: var(--text2); max-width: 30em; }
+.lead b { color: var(--text); font-weight: 600; }
+.cta-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.also { margin-top: 18px; font-size: 14px; color: var(--text2); }
+.also a { color: var(--text); font-weight: 600; }
+.also a:hover { color: var(--accent-fg); }
+.also .sep { opacity: .4; margin: 0 6px; }
+
+/* Окно приложения — плоское, как в «Фокусе»; наклоняется за курсором */
+.stage { position: relative; perspective: 1600px; padding: 28px 0; }
+.app-win { position: relative; z-index: 1; transform: rotateY(var(--ry, -6deg)) rotateX(var(--rx, 3deg)); transition: transform .6s var(--ease-out); }
+.app-win { width: 100%; height: 440px; border-radius: 16px; overflow: hidden; background: rgb(var(--surface-rgb)); box-shadow: 0 0 0 1px var(--f-hairline), var(--sheet-shadow); display: grid; grid-template-rows: 34px 1fr; }
+.win-bar { position: relative; display: flex; align-items: center; gap: 7px; padding: 0 13px; box-shadow: 0 1px 0 var(--f-hairline); }
+.win-bar i { width: 10px; height: 10px; border-radius: 50%; background: rgba(var(--ink-rgb), .14); }
+.win-bar span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; font-weight: 700; opacity: var(--meta); }
+.win-body { display: grid; grid-template-columns: 60px 190px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 0; }
+.sv { width: 38px; height: 38px; border-radius: 30%; display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #fff; position: relative; flex: none; }
+.sv.dm { border-radius: 50%; background: var(--accent); color: var(--on-accent); }
+.sv.dm svg { width: 19px; height: 19px; }
+.sv.on { box-shadow: 0 0 0 3px rgb(var(--surface-rgb)), 0 0 0 5px var(--accent); }
+.rail .sep { width: 22px; height: 2px; border-radius: 2px; background: var(--f-fill-strong); }
+.sv .dot { position: absolute; right: -4px; bottom: -4px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: 800; display: grid; place-items: center; border: 3px solid rgb(var(--surface-rgb)); box-sizing: content-box; }
+.side { padding: 12px 10px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.search { height: 32px; border-radius: 10px; background: var(--f-fill); margin-bottom: 8px; display: flex; align-items: center; gap: 7px; padding: 0 10px; font-size: 12px; }
+.search svg { width: 13px; height: 13px; opacity: var(--meta); }
+.search span { opacity: var(--meta); }
+.ct { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center; padding: 7px 8px; border-radius: 12px; min-width: 0; }
+.ct.active { background: var(--f-fill-strong); }
+.ava { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #fff; flex: none; }
+.ct b { display: block; font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct small { display: block; font-size: 11px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct small.play { color: var(--accent-fg); }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: 800; display: grid; place-items: center; }
+.chat { display: grid; grid-template-rows: 50px 1fr 56px; min-width: 0; }
+.chat-head { display: flex; align-items: center; gap: 10px; padding: 0 14px; box-shadow: 0 1px 0 var(--f-hairline); min-width: 0; }
+.chat-head .ava { width: 32px; height: 32px; }
+.chat-head b { display: block; font-size: 13.5px; font-weight: 700; line-height: 1.2; }
+.chat-head small { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text2); white-space: nowrap; }
+.chat-head small svg { width: 11px; height: 11px; color: var(--accent-fg); }
+.chat-head .icons { margin-left: auto; display: flex; gap: 2px; }
+.chat-head .icons span { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; opacity: .7; }
+.chat-head .icons svg { width: 17px; height: 17px; }
+.msgs { display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; padding: 14px; min-height: 0; overflow: hidden; }
+.day { align-self: center; height: 22px; padding: 0 10px; border-radius: 999px; background: var(--f-fill); font-size: 11px; font-weight: 600; color: var(--text2); display: grid; place-items: center; margin-bottom: 4px; }
+.m { display: flex; flex-direction: column; max-width: 78%; }
+.m.in { align-self: flex-start; align-items: flex-start; }
+.m.out { align-self: flex-end; align-items: flex-end; }
+.bub { padding: 8px 12px 7px; border-radius: 18px; font-size: 13px; line-height: 1.42; }
+.m.in .bub, .bub.in { border-bottom-left-radius: 6px; background: var(--f-fill-strong); }
+.m.out .bub, .bub.out { border-bottom-right-radius: 6px; background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 1px var(--accent-edge); }
+.bub time { font-size: 10px; margin-left: 8px; opacity: .55; font-weight: 600; float: right; margin-top: 5px; }
+.react { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--f-fill-strong); font-size: 11px; font-weight: 700; }
+.react.own { background: var(--accent); color: var(--on-accent); }
+.quote { display: grid; gap: 1px; margin: -2px -5px 7px; padding: 6px 10px; border-radius: 10px; background: rgba(0,0,0,.1); font-size: 12px; line-height: 1.3; }
+.quote b { font-size: 11.5px; }
+.edited { font-size: 10px; opacity: .55; font-weight: 600; margin-left: 6px; }
+.composer { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; }
+.composer .field { flex: 1; min-width: 0; height: 38px; border-radius: 12px; background: var(--f-fill); display: flex; align-items: center; padding: 0 12px; font-size: 12.5px; }
+.composer .field span { opacity: var(--meta); }
+.send { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); flex: none; }
+.send svg { width: 17px; height: 17px; }
+
+/* ── Секции ───────────────────────────────────────────────────────────── */
+section { padding: 96px 0; }
+section + section { padding-top: 0; }
+.sec-head { max-width: 680px; margin-bottom: 36px; }
+.eyebrow { font-size: 14px; font-weight: 700; color: var(--accent-fg); margin-bottom: 10px; }
+h2 { margin: 0 0 12px; font-size: clamp(30px, 3.4vw, 42px); line-height: 1.08; font-weight: 800; letter-spacing: -.03em; text-wrap: balance; }
+.sec-head p { margin: 0; font-size: 17px; color: var(--text2); }
+h3 { margin: 0 0 6px; font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+.tile-glyph { width: 40px; height: 40px; border-radius: 12px; background: var(--f-fill); display: grid; place-items: center; color: var(--accent-fg); flex: none; }
+.tile-glyph svg { width: 20px; height: 20px; }
+
+/* Возможности — иллюстрации идут подряд, без вкладок; стороны чередуются */
+.show { display: grid; grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr); gap: 20px; padding: 20px; border-radius: 20px; background: var(--f-surface); box-shadow: var(--sheet-shadow); }
+.show + .show { margin-top: 16px; }
+.show.flip { grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr); }
+.show.flip .tab-copy { order: 2; padding: 14px 12px 14px 10px; }
+.tab-copy { align-self: center; padding: 14px 10px 14px 12px; }
+.tab-copy .tile-glyph { margin-bottom: 16px; }
+.tab-copy h3 { font-size: 22px; margin-bottom: 8px; }
+.tab-copy > p { margin: 0 0 20px; color: var(--text2); font-size: 15px; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; font-size: 14.5px; line-height: 1.45; }
+.checks li svg { width: 18px; height: 18px; color: var(--accent-fg); margin-top: 2px; }
+.checks b { font-weight: 700; }
+.checks span { color: var(--text2); }
+
+/* Макеты внутри вкладок */
+.panel { position: relative; border-radius: 16px; overflow: hidden; background: rgb(var(--surface-rgb)); box-shadow: 0 0 0 1px var(--f-hairline); min-height: 440px; }
+.panel-head { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; box-shadow: 0 1px 0 var(--f-hairline); min-width: 0; }
+.panel-head .ava { width: 32px; height: 32px; }
+.panel-head b { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.panel-head small { font-size: 12px; color: var(--text2); white-space: nowrap; }
+.panel-head > svg { width: 16px; height: 16px; opacity: .6; }
+.panel.chatp { display: flex; flex-direction: column; min-height: 480px; }
+.pv-chat { flex: 1; padding: 16px 16px 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; position: relative; }
+.pv-chat .row { display: flex; flex-direction: column; max-width: 74%; }
+.pv-chat .row.in { align-self: flex-start; align-items: flex-start; }
+.pv-chat .row.out { align-self: flex-end; align-items: flex-end; }
+.pv-chat .bub { font-size: 13.5px; }
+.media { width: 230px; border-radius: 18px 18px 18px 6px; overflow: hidden; background: var(--f-fill-strong); }
+.media .art { height: 120px; background: #1e2130; }
+.media .art svg { width: 100%; height: 100%; }
+.media .cap { display: flex; justify-content: space-between; padding: 7px 12px; font-size: 12px; font-weight: 600; }
+.media .cap span { opacity: var(--meta); }
+.reacts { display: flex; gap: 4px; margin-top: 4px; }
+.file { display: grid; grid-template-columns: 38px 1fr 30px; gap: 10px; align-items: center; width: 250px; padding: 9px; border-radius: 18px 18px 18px 6px; background: var(--f-fill-strong); }
+.file .tile-glyph { width: 38px; height: 38px; border-radius: 10px; }
+.file .tile-glyph svg { width: 18px; height: 18px; }
+.file b { display: block; font-size: 12.5px; } .file small { font-size: 11px; opacity: var(--meta); font-weight: 600; }
+.file .dl { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--f-fill); }
+.file .dl svg { width: 14px; height: 14px; }
+.ctx { position: absolute; right: 16px; top: 12px; z-index: 2; width: 200px; padding: 6px; border-radius: 14px; background: rgb(var(--surface-rgb)); box-shadow: 0 0 0 1px var(--f-hairline), var(--pop-shadow); }
+.ctx-r { display: flex; justify-content: space-between; padding: 2px 2px 6px; margin-bottom: 4px; font-size: 18px; box-shadow: 0 1px 0 var(--f-hairline); }
+.ctx-r span { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
+.ctx-i { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 9px; font-size: 13px; font-weight: 600; }
+.ctx-i svg { width: 16px; height: 16px; opacity: .75; }
+.ctx-i.hl { background: var(--f-fill-strong); }
+.ctx-i.danger { color: var(--danger); }
+.pv-composer { display: flex; align-items: flex-end; gap: 8px; padding: 12px 14px 14px; background: rgb(var(--surface-rgb)); }
+.pv-composer .reply-to { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.reply-bar { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text2); padding: 0 4px; }
+.reply-bar svg { width: 14px; height: 14px; color: var(--accent-fg); }
+.reply-bar b { color: var(--text); }
+.pv-composer .field { height: 40px; border-radius: 12px; background: var(--f-fill); display: flex; align-items: center; padding: 0 12px; font-size: 13px; }
+.pv-composer .field span { opacity: var(--meta); }
+.pv-composer .send { width: 40px; height: 40px; }
+
+.pv-srv { display: grid; grid-template-columns: 60px 176px minmax(0, 1fr); }
+.chs { padding: 0 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; background: rgba(var(--ink-rgb), .02); }
+.chs-head { height: 52px; display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 800; box-shadow: 0 1px 0 var(--f-hairline); margin: 0 -10px 8px; padding: 0 14px; }
+.chs-head svg { width: 16px; height: 16px; opacity: .6; }
+.cat { font-size: 11px; font-weight: 700; opacity: var(--meta); padding: 10px 8px 4px; text-transform: uppercase; letter-spacing: .04em; }
+.ch { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 10px; font-size: 13px; font-weight: 600; color: var(--text2); }
+.ch svg { width: 15px; height: 15px; opacity: .7; flex: none; }
+.ch.on { background: var(--f-fill-strong); color: var(--text); }
+.ch .badge { margin-left: auto; }
+.vu { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 30px; font-size: 12px; font-weight: 600; color: var(--text2); }
+.vu i { width: 20px; height: 20px; border-radius: 50%; flex: none; }
+.vu i.speak { box-shadow: 0 0 0 2px rgb(var(--surface-rgb)), 0 0 0 3.5px var(--accent); }
+.vu svg { width: 13px; height: 13px; margin-left: auto; opacity: .55; }
+.srv-feed { display: flex; flex-direction: column; min-width: 0; }
+.posts { flex: 1; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; justify-content: flex-end; }
+.post { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; min-width: 0; }
+.post .ava { width: 34px; height: 34px; }
+.post .who { display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 700; flex-wrap: wrap; }
+.post .who small { font-size: 10.5px; font-weight: 600; opacity: var(--meta); }
+.role { height: 18px; padding: 0 7px; border-radius: 999px; background: var(--f-fill-strong); font-size: 10.5px; font-weight: 700; display: inline-grid; place-items: center; }
+.post p { overflow-wrap: anywhere; margin: 1px 0 0; font-size: 13px; line-height: 1.45; color: var(--text2); }
+.invite { margin-top: 6px; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px; border-radius: 14px; background: var(--f-fill); max-width: 320px; }
+.invite > div:nth-child(2) { min-width: 0; }
+.invite b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.invite .sv { width: 40px; height: 40px; }
+.invite b { display: block; font-size: 13px; } .invite small { display: block; font-size: 11px; opacity: var(--meta); font-weight: 600; }
+.invite .go { height: 32px; padding: 0 12px; border-radius: 10px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+
+.pv-call { padding: 12px; display: grid; gap: 10px; }
+.call-stage { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 10px; height: 340px; }
+.screen-tile { position: relative; border-radius: 14px; background: var(--f-fill); overflow: hidden; }
+.desk { position: absolute; inset: 14px 14px 48px; border-radius: 10px; background: rgb(var(--surface-rgb)); box-shadow: 0 0 0 1px var(--f-hairline); overflow: hidden; display: grid; grid-template-rows: 30px 1fr; }
+.desk-url { display: flex; align-items: center; gap: 6px; padding: 0 10px; box-shadow: 0 1px 0 var(--f-hairline); }
+.desk-url i { width: 7px; height: 7px; border-radius: 50%; background: rgba(var(--ink-rgb), .18); }
+.desk-url span { flex: 1; margin-left: 6px; height: 18px; border-radius: 6px; background: var(--f-fill); font-size: 10px; line-height: 18px; padding: 0 8px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.desk-page { padding: 12px; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: 30px minmax(0, 1fr) 26px; gap: 8px; }
+.desk-page .hb.ft { background: var(--f-fill); }
+.desk-page .hb { grid-column: span 3; border-radius: 8px; background: var(--f-fill-strong); display: flex; align-items: center; gap: 8px; padding: 0 10px; }
+.desk-page u, .tk u { display: block; height: 6px; border-radius: 3px; background: rgba(var(--ink-rgb), .26); text-decoration: none; }
+.tk { border-radius: 8px; background: var(--f-fill); padding: 6px; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
+.tk b { flex: 1; min-height: 0; border-radius: 5px; }
+.tk u { height: 5px; background: rgba(var(--ink-rgb), .2); }
+.tk u:last-child { width: 58%; }
+.tk.sel { box-shadow: 0 0 0 2px var(--accent); }
+.cur { position: absolute; display: flex; align-items: flex-start; gap: 2px; z-index: 2; }
+.cur svg { width: 17px; height: 17px; }
+.cur span { margin-top: 13px; height: 19px; padding: 0 7px; border-radius: 6px 9px 9px 9px; font-size: 10.5px; font-weight: 700; color: #fff; display: flex; align-items: center; white-space: nowrap; }
+.tag { position: absolute; left: 12px; bottom: 11px; height: 26px; padding: 0 10px; border-radius: 9px; background: var(--f-fill-strong); font-size: 11.5px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.tag svg { width: 13px; height: 13px; }
+.people { display: grid; grid-template-rows: repeat(3, 1fr); gap: 10px; }
+.ptile { position: relative; border-radius: 14px; background: var(--f-fill); display: grid; place-items: center; }
+.ptile .ava { width: 44px; height: 44px; font-size: 15px; }
+.ptile .ava.speak { box-shadow: 0 0 0 3px rgb(var(--surface-rgb)), 0 0 0 5px var(--accent); }
+.ptile label { position: absolute; left: 8px; bottom: 7px; font-size: 11px; font-weight: 700; }
+.ptile .muted { position: absolute; right: 7px; top: 7px; width: 22px; height: 22px; border-radius: 50%; background: var(--f-fill-strong); color: var(--danger); display: grid; place-items: center; }
+.ptile .muted svg { width: 12px; height: 12px; }
+.call-bar { display: flex; align-items: center; gap: 8px; padding: 4px 4px 2px; }
+.call-bar .info { font-size: 12.5px; font-weight: 700; display: grid; line-height: 1.25; }
+.call-bar .info small { font-size: 11.5px; font-weight: 600; opacity: var(--meta); }
+.call-bar .ctl { margin-left: auto; display: flex; gap: 8px; }
+.call-bar .ctl span { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--f-fill); }
+.call-bar .ctl span.on { background: var(--accent); color: var(--on-accent); }
+.call-bar .ctl span.end { background: var(--danger); color: #fff; width: 54px; }
+.call-bar .ctl svg { width: 18px; height: 18px; }
+
+/* Прочие возможности — плитки-итоги */
+.more { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.mtile { display: grid; grid-template-columns: 40px 1fr; gap: 14px; padding: 18px; border-radius: 16px; background: var(--f-surface); box-shadow: var(--sheet-shadow); }
+.mtile b { display: block; font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+.mtile span { display: block; font-size: 13.5px; color: var(--text2); line-height: 1.45; }
+
+/* ── Приватность — таблица ────────────────────────────────────────────── */
+.ptable { border-radius: 20px; background: var(--f-surface); box-shadow: var(--sheet-shadow); overflow: hidden; }
+.prow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr); gap: 24px; padding: 18px 24px; align-items: start; }
+.prow + .prow { box-shadow: 0 -1px 0 var(--f-hairline); }
+.prow.head { padding-top: 16px; padding-bottom: 12px; font-size: 12.5px; font-weight: 700; opacity: var(--meta); }
+.prow.head .how, .prow.head .who { padding-top: 0; font-size: inherit; color: inherit; }
+.prow .what { display: flex; gap: 12px; align-items: center; font-size: 15px; font-weight: 700; }
+.prow .what .tile-glyph { width: 36px; height: 36px; border-radius: 10px; }
+.prow .what .tile-glyph svg { width: 18px; height: 18px; }
+.prow .how, .prow .who { font-size: 14px; line-height: 1.5; color: var(--text2); padding-top: 7px; }
+.prow .who b { color: var(--text); font-weight: 600; }
+.pill-ok, .pill-warn { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; margin-right: 6px; vertical-align: 1px; }
+.pill-ok { background: var(--accent); color: var(--on-accent); }
+.pill-warn { background: var(--f-fill-strong); color: var(--text); }
+.pnote { margin: 14px 0 0; font-size: 14px; color: var(--text2); }
+
+/* Схема шифрования личного сообщения */
+.scheme { margin: 0 0 12px; padding: 24px; border-radius: 20px; background: var(--f-surface); box-shadow: var(--sheet-shadow); display: grid; gap: 20px; }
+.sch-flow { display: grid; grid-template-columns: minmax(0, 1fr) 92px minmax(0, 1fr) 92px minmax(0, 1fr); align-items: stretch; }
+.sch-node { display: flex; flex-direction: column; gap: 14px; padding: 16px; min-width: 0; border-radius: 16px; background: rgb(var(--surface-rgb)); box-shadow: 0 0 0 1px var(--f-hairline); }
+.sch-node.srv { background: var(--f-fill); box-shadow: none; }
+.sch-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sch-who .ava, .sch-who .tile-glyph { width: 36px; height: 36px; flex: none; }
+.sch-who .tile-glyph { border-radius: 10px; }
+.sch-who > div:last-child { min-width: 0; }
+.sch-who b { display: block; font-size: 14px; line-height: 1.25; }
+.sch-who small { display: block; font-size: 12px; line-height: 1.3; color: var(--text2); }
+.sch-msg { align-self: flex-start; max-width: 100%; padding: 10px 14px; border-radius: 16px 16px 16px 6px; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+.sch-msg.out { background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 1px var(--accent-edge); }
+.sch-msg.in { background: var(--f-fill-strong); }
+.sch-msg.cipher { background: var(--f-fill-strong); color: var(--text2); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; letter-spacing: .02em; }
+.sch-chip { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px 0 9px; border-radius: 999px; background: var(--f-fill-strong); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.sch-chip svg { width: 14px; height: 14px; color: var(--accent-fg); }
+.sch-chip.no svg { color: var(--danger); }
+.sch-step { margin-top: auto; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; font-size: 13px; line-height: 1.4; color: var(--text2); }
+.sch-step svg { width: 16px; height: 16px; margin-top: 1px; color: var(--accent-fg); }
+.sch-link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 0 8px; font-size: 11px; font-weight: 700; color: var(--text2); }
+.sch-link span { white-space: nowrap; }
+.sch-link i { position: relative; display: block; width: 100%; height: 2px; color: rgba(var(--ink-rgb), .3); background: currentColor; }
+.sch-link i::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-right: 0; border-left: 7px solid currentColor; }
+.sch-key { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px; align-items: center; padding: 16px 18px; border-radius: 16px; background: var(--f-fill); }
+.sch-key b { display: block; font-size: 15px; margin-bottom: 2px; }
+.sch-key div span { display: block; font-size: 14px; line-height: 1.5; color: var(--text2); }
+.sch-note { margin: 0; font-size: 13px; color: var(--text2); }
+@media (max-width: 900px) {
+  .sch-flow { grid-template-columns: minmax(0, 1fr); }
+  .sch-link { flex-direction: row; padding: 10px 0; gap: 10px; }
+  .sch-link i { width: 2px; height: 30px; }
+  .sch-link i::after { right: auto; left: -4px; top: auto; bottom: -1px; border: 5px solid transparent; border-bottom: 0; border-top: 7px solid currentColor; }
+}
+@media (max-width: 720px) {
+  .scheme { padding: 14px; gap: 14px; }
+  .sch-node { padding: 14px; }
+}
+
+/* ── Скачать ──────────────────────────────────────────────────────────── */
+.plats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.plat { display: grid; grid-template-rows: auto 1fr auto; gap: 16px; padding: 22px 22px 18px 24px; border-radius: 18px; background: var(--f-surface); box-shadow: var(--sheet-shadow); }
+.plat.is-mine { background: var(--f-fill); }
+.plat-top { display: flex; align-items: center; gap: 14px; }
+.plat-top svg.art { width: 40px; height: 40px; color: var(--text); opacity: .7; flex: none; }
+.plat-top strong { font-size: 21px; font-weight: 800; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.plat-top small { display: block; font-size: 12.5px; font-weight: 600; color: var(--text2); font-variant-numeric: tabular-nums; min-height: 1.4em; }
+.mine { display: none; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--f-fill-strong); font-size: 11.5px; font-weight: 700; align-items: center; }
+.plat.is-mine .mine { display: inline-flex; }
+.specs { margin: 0; display: grid; gap: 9px; font-size: 13.5px; align-content: start; }
+.specs div { display: grid; grid-template-columns: 112px 1fr; gap: 10px; }
+.specs dt { color: var(--text2); }
+.specs dd { margin: 0; line-height: 1.45; }
+.plat .btn { width: 100%; height: 44px; border-radius: 12px; font-size: 14.5px; }
+.plat.is-mine .btn-ghost { background: var(--accent); color: var(--on-accent); }
+.notes { margin-top: 12px; display: grid; grid-template-columns: 40px 1fr; gap: 14px; padding: 18px 20px; border-radius: 18px; background: var(--f-surface); box-shadow: var(--sheet-shadow); }
+.notes[hidden] { display: none; }
+.notes b { display: block; font-size: 15px; margin-bottom: 4px; }
+.notes pre { margin: 0; font: inherit; font-size: 14px; line-height: 1.55; color: var(--text2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow: auto; }
+
+/* ── Как начать ───────────────────────────────────────────────────────── */
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; counter-reset: s; }
+.step { padding: 22px; border-radius: 18px; background: var(--f-surface); box-shadow: var(--sheet-shadow); }
+.step::before { counter-increment: s; content: counter(s); width: 32px; height: 32px; border-radius: 50%; background: var(--f-fill-strong); display: grid; place-items: center; font-size: 14px; font-weight: 800; margin-bottom: 14px; }
+.step b { display: block; font-size: 16px; margin-bottom: 4px; }
+.step span { display: block; font-size: 14px; color: var(--text2); line-height: 1.5; }
+
+/* ── FAQ ──────────────────────────────────────────────────────────────── */
+.faq-grid { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1.3fr); gap: 56px; align-items: start; }
+.faq { display: grid; gap: 8px; }
+.faq details { border-radius: 16px; background: var(--f-surface); box-shadow: var(--sheet-shadow); }
+.faq summary { list-style: none; display: flex; align-items: center; gap: 16px; min-height: 58px; padding: 12px 14px 12px 20px; font-size: 16px; font-weight: 700; cursor: pointer; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22); border-radius: 16px; }
+.faq summary i { margin-left: auto; width: 30px; height: 30px; display: grid; place-items: center; flex: none; opacity: .6; }
+.faq summary i svg { width: 16px; height: 16px; transition: transform .2s var(--ease-out); }
+.faq details[open] summary i svg { transform: rotate(180deg); }
+.faq details p { margin: 0; padding: 0 20px 18px; font-size: 14.5px; color: var(--text2); line-height: 1.55; max-width: 44em; }
+
+/* ── Финал и подвал ──────────────────────────────────────────────────── */
+.final { display: flex; align-items: center; gap: 16px; padding: 24px 24px 24px 28px; border-radius: 20px; background: var(--f-fill); flex-wrap: wrap; }
+.final img { width: 52px; height: 52px; border-radius: 14px; }
+.final div { flex: 1; min-width: 220px; }
+.final b { display: block; font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+.final div span { font-size: 14.5px; color: var(--text2); }
+footer { padding: 40px 0 44px; }
+.foot { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; font-size: 14px; }
+.foot .brand { font-size: 15px; } .foot .brand img { width: 26px; height: 26px; border-radius: 8px; }
+.foot nav { display: flex; gap: 2px; flex-wrap: wrap; margin-left: auto; }
+.foot nav a { padding: 6px 10px; border-radius: 9px; color: var(--text2); font-weight: 600; }
+.foot nav a:hover { background: var(--f-fill); color: var(--text); }
+.foot .copy { width: 100%; font-size: 13px; opacity: var(--meta); font-weight: 600; }
+
+
+/* ── Движение ─────────────────────────────────────────────────────────── */
+@keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.88); } to { opacity: 1; transform: none; } }
+@keyframes leave { to { opacity: 0; transform: translateY(-12px) scale(.96); } }
+@keyframes blink { 0%, 60%, 100% { opacity: .25; transform: none; } 30% { opacity: .9; transform: translateY(-3px); } }
+@keyframes caret { 50% { opacity: 0; } }
+@keyframes bob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -8px; } }
+.m.pop, .react.pop { animation: pop .42s var(--spring) both; }
+.m.in.pop { transform-origin: 0 100%; } .m.out.pop { transform-origin: 100% 100%; }
+.m.leave, .day.leave { animation: leave .35s var(--ease-out) forwards; }
+.typing { align-self: flex-start; display: flex; gap: 4px; padding: 11px 13px; border-radius: 18px 18px 18px 6px; background: var(--f-fill-strong); animation: pop .3s var(--spring) both; transform-origin: 0 100%; }
+.typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--text); opacity: .4; animation: blink 1.1s infinite; }
+.typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+.composer .field { white-space: nowrap; overflow: hidden; }
+.caret { width: 1.5px; height: 15px; background: var(--accent-fg); margin-left: 2px; flex: none; animation: caret 1s steps(1) infinite; }
+
+/* Парящие карточки вокруг окна — тень, без свечения */
+.float { position: absolute; z-index: 2; border-radius: 16px; background: rgb(var(--surface-rgb)); box-shadow: var(--float-shadow), 0 0 0 1px var(--f-hairline); animation: bob 7s ease-in-out infinite; transition: transform .6s var(--ease-out); }
+.f-call { right: -22px; top: -4px; width: 220px; padding: 12px; animation-delay: -2s; }
+.f-game { left: -34px; bottom: 6px; display: flex; align-items: center; gap: 10px; padding: 9px 14px 9px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 700; white-space: nowrap; animation-delay: -4.5s; }
+.f-game .ava { width: 28px; height: 28px; font-size: 11px; }
+.f-game em { font-style: normal; color: var(--accent-fg); }
+.f-game svg { width: 16px; height: 16px; color: var(--accent-fg); }
+.fc-title { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; }
+.fc-title small { font-weight: 600; opacity: var(--meta); font-variant-numeric: tabular-nums; }
+.live { display: inline-flex; align-items: center; gap: 6px; }
+.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: caret 1.6s infinite; }
+.call-avas { display: flex; gap: 10px; margin: 12px 0; justify-content: center; }
+.call-avas .ava { width: 42px; height: 42px; font-size: 15px; }
+.call-ctl { display: flex; gap: 8px; justify-content: center; }
+.call-ctl span { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--f-fill); }
+.call-ctl span.on { background: var(--accent); color: var(--on-accent); }
+.call-ctl span.end { background: var(--danger); color: #fff; }
+.call-ctl svg { width: 17px; height: 17px; }
+.speakable { transition: box-shadow .25s var(--ease-out); }
+.ava.speakable.speak { box-shadow: 0 0 0 3px rgb(var(--surface-rgb)), 0 0 0 5px var(--accent); }
+.vu i.speakable.speak { box-shadow: 0 0 0 2px rgb(var(--surface-rgb)), 0 0 0 3.5px var(--accent); }
+
+/* Появление блоков при прокрутке */
+.js .rv { opacity: 0; transform: translateY(22px); transition: opacity .7s var(--ease-out), transform .7s var(--ease-out); transition-delay: var(--d, 0s); }
+.js .rv.shown { opacity: 1; transform: none; }
+
+/* Живые макеты возможностей — крутятся, только пока видны */
+.ctx { transform-origin: 100% 0; }
+.js .show .ctx { opacity: 0; }
+.show.in-view .ctx { animation: ctxin 6.5s var(--ease-out) infinite; }
+@keyframes ctxin { 0%, 14% { opacity: 0; transform: scale(.92) translateY(-6px); } 20%, 80% { opacity: 1; transform: none; } 88%, 100% { opacity: 0; transform: scale(.97); } }
+.show.in-view .ctx-r span:nth-child(2) { animation: ctxpick 6.5s var(--spring) infinite; }
+@keyframes ctxpick { 0%, 30% { transform: none; background: transparent; } 36% { transform: scale(1.3); background: var(--f-fill-strong); } 44%, 80% { transform: none; background: var(--f-fill-strong); } 100% { background: transparent; } }
+.show.in-view .react.own { animation: reactpulse 6.5s var(--spring) infinite; }
+@keyframes reactpulse { 0%, 38% { transform: scale(0); opacity: 0; } 44% { transform: scale(1.15); opacity: 1; } 50%, 100% { transform: none; opacity: 1; } }
+.cur { animation-timing-function: cubic-bezier(.45,0,.2,1); animation-iteration-count: infinite; }
+.show.in-view .cur.c1 { animation-name: cur1; animation-duration: 7s; }
+.show.in-view .cur.c2 { animation-name: cur2; animation-duration: 8.5s; }
+@keyframes cur1 { 0%, 100% { left: 22%; top: 46%; } 30% { left: 46%; top: 44%; } 60% { left: 66%; top: 52%; } 82% { left: 30%; top: 62%; } }
+@keyframes cur2 { 0%, 100% { left: 58%; top: 58%; } 28% { left: 28%; top: 60%; } 58% { left: 16%; top: 36%; } 84% { left: 62%; top: 38%; } }
+.wave { display: flex; gap: 3px; align-items: center; height: 16px; position: absolute; right: 9px; top: 9px; }
+.wave i { width: 3px; border-radius: 2px; background: var(--accent); animation: wv 1s ease-in-out infinite; }
+.wave i:nth-child(1) { animation-delay: -.2s; } .wave i:nth-child(2) { animation-delay: -.5s; } .wave i:nth-child(3) { animation-delay: -.1s; } .wave i:nth-child(4) { animation-delay: -.7s; }
+@keyframes wv { 0%, 100% { height: 4px; } 50% { height: 16px; } }
+.plat, .mtile, .step { transition: background .15s var(--ease-out), transform .25s var(--ease-out); }
+.plat:hover, .mtile:hover, .step:hover { transform: translateY(-2px); }
+.mtile .tile-glyph svg { transition: transform .35s var(--spring); }
+.mtile:hover .tile-glyph svg { transform: scale(1.12) rotate(-6deg); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+  .js .rv, .js .show .ctx { opacity: 1; transform: none; }
+  .app-win { transform: none; }
+}
+
+/* ── Адаптив ──────────────────────────────────────────────────────────── */
+@media (max-width: 1020px) {
+  .hero-grid, .show, .show.flip, .faq-grid { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .app-win { --ry: 0deg; --rx: 0deg; }
+  .f-call { right: 0; } .f-game { left: 0; }
+  .show, .show.flip { gap: 8px; }
+  .show.flip .tab-copy { order: 0; padding: 14px 10px 14px 12px; }
+  .more, .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .prow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+  .prow .who { grid-column: 2; padding-top: 0; }
+  .prow.head .who { display: none; }
+}
+@media (min-width: 1021px) and (max-width: 1200px) {
+  .show { grid-template-columns: minmax(0, .7fr) minmax(0, 1.3fr); }
+  .show.flip { grid-template-columns: minmax(0, 1.3fr) minmax(0, .7fr); }
+  .pv-srv { grid-template-columns: 60px 152px minmax(0, 1fr); }
+}
+@media (max-width: 820px) { .nav-links { display: none; } }
+@media (max-width: 720px) {
+  :root { --gutter: 16px; }
+  .nav-in { height: 58px; gap: 12px; }
+  .nav-cta .btn-ghost { display: none; }
+  .hero { padding: 32px 0 72px; }
+  .lead { font-size: 16px; }
+  .cta-row { flex-direction: column; }
+  .app-win { height: 400px; }
+  .stage { padding: 34px 0 8px; }
+  .f-game { display: none; }
+  .f-call { right: -4px; top: 0; width: 196px; padding: 10px; }
+  .f-call .fc-title { font-size: 11px; white-space: nowrap; gap: 6px; }
+  .f-call .call-avas .ava { width: 34px; height: 34px; font-size: 13px; }
+  .f-call .call-ctl span { width: 34px; height: 34px; }
+  .win-body { grid-template-columns: minmax(0, 1fr); }
+  .app-win .rail, .app-win .side { display: none; }
+  section { padding: 72px 0; }
+  .sec-head p { font-size: 15.5px; }
+  .show { padding: 10px; border-radius: 18px; }
+  .show + .show { margin-top: 12px; }
+  .tab-copy { padding: 10px 8px 14px; }
+  .panel { min-height: 420px; }
+  .panel.chatp { min-height: 0; }
+  .ctx { display: none; }
+  .pv-chat .row { max-width: 86%; }
+  .media { width: 200px; } .media .art { height: 104px; }
+  .file { width: 220px; }
+  .pv-srv { grid-template-columns: 54px minmax(0, 1fr); }
+  .invite { grid-template-columns: 40px minmax(0, 1fr); }
+  .invite .go { grid-column: 1 / -1; }
+  .pv-srv .rail .sv { width: 34px; height: 34px; }
+  .chs { display: none; }
+  .call-stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: 210px 84px; height: auto; }
+  .people { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; }
+  .ptile .ava { width: 36px; height: 36px; font-size: 13px; }
+  .tag { display: none; }
+  .call-bar .info { display: none; }
+  .call-bar .ctl { margin: 0 auto; }
+  .more, .steps, .plats { grid-template-columns: minmax(0, 1fr); }
+  .prow { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 16px 18px; }
+  .prow .how, .prow .who { grid-column: 1; padding-top: 0; }
+  .prow.head { display: none; }
+  .specs div { grid-template-columns: 96px 1fr; }
+  .final { padding: 20px; }
+  .final .btn { width: 100%; }
+  .foot nav { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-dl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"/><path d="M9 8h7v7"/></symbol>
+    <symbol id="i-chev-d" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="3"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/><circle cx="12" cy="15.5" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18.5 3.8 21l3.6-1.2A9 9 0 1 0 5 18.5Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 3.5h2.6l1.4 4-2 1.6a12 12 0 0 0 6.3 6.3l1.6-2 4 1.4v2.6a2 2 0 0 1-2.1 2A16.5 16.5 0 0 1 4.6 5.6a2 2 0 0 1 2-2.1Z"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10.5 5-3v9l-5-3"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 9.5V6a3 3 0 0 0-5.7-1.3"/><path d="M5.5 11a6.5 6.5 0 0 0 11 4.7M12 17.5V21M3 3l18 18"/></symbol>
+    <symbol id="i-screen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M8.5 21h7M12 17v4"/><path d="m9.5 11 2.5-2.5 2.5 2.5M12 8.5v5"/></symbol>
+    <symbol id="i-end" viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-3.6 0-7 1.1-9.1 3.1a1.4 1.4 0 0 0 0 2l1.7 1.6c.5.4 1.2.5 1.7.1l2.1-1.6c.4-.3.6-.7.6-1.2V11a12 12 0 0 1 6 0v2c0 .5.2.9.6 1.2l2.1 1.6c.5.4 1.2.3 1.7-.1l1.7-1.6a1.4 1.4 0 0 0 0-2C19 10.1 15.6 9 12 9Z"/></symbol>
+    <symbol id="i-pad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 7h9a5 5 0 0 1 4.9 6l-.8 4a2.6 2.6 0 0 1-4.5 1.2L14 16h-4l-2.1 2.2a2.6 2.6 0 0 1-4.5-1.2l-.8-4A5 5 0 0 1 7.5 7Z"/><path d="M8 10.5v3M6.5 12h3"/><circle cx="15.5" cy="11" r=".9" fill="currentColor"/><circle cx="17" cy="13" r=".9" fill="currentColor"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 9h15M4 15h15M10 4 8 20M16 4l-2 16"/></symbol>
+    <symbol id="i-vol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.2 7.5 9.5 4.3-1.3 7.5-4.9 7.5-9.5V6Z"/><path d="m8.8 12 2.2 2.2 4.2-4.4"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-people" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5a6.5 6.5 0 0 1 13 0"/><path d="M15.5 5.2a3.5 3.5 0 0 1 0 6.6M18 13.5a6.5 6.5 0 0 1 3.5 6"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4.5a2 2 0 1 1 4 0V6h3.5A1.5 1.5 0 0 1 18 7.5V11h1.5a2 2 0 1 1 0 4H18v3.5a1.5 1.5 0 0 1-1.5 1.5H13v-1.5a2 2 0 1 0-4 0V20H5.5A1.5 1.5 0 0 1 4 18.5V15h1.5a2 2 0 1 0 0-4H4V7.5A1.5 1.5 0 0 1 5.5 6H9Z"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-1.4-1.3-1.7-1.3-3 0-1 .8-1.8 1.8-1.8h2.2a4 4 0 0 0 4-4C20.5 6.6 16.7 3.5 12 3.5Z"/><circle cx="7.8" cy="11" r="1.1" fill="currentColor"/><circle cx="10.5" cy="7.3" r="1.1" fill="currentColor"/><circle cx="15" cy="7.6" r="1.1" fill="currentColor"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3.5H7.5A2 2 0 0 0 5.5 5.5v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8Z"/><path d="M14 3.5V8h4.5M9 13h6M9 16.5h4"/></symbol>
+    <symbol id="i-reply" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6 4 11.5 9.5 17"/><path d="M4.5 11.5H14a6 6 0 0 1 6 6V19"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/></symbol>
+    <symbol id="i-fwd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6 20 11.5 14.5 17"/><path d="M19.5 11.5H10a6 6 0 0 0-6 6V19"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="3"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M9.5 6.5V4.5h5v2M6 6.5l1 13a1.5 1.5 0 0 0 1.5 1.4h7A1.5 1.5 0 0 0 17 19.5l1-13"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 3.6 5.6 3.6 8.5s-1 5.9-3.6 8.5c-2.6-2.6-3.6-5.6-3.6-8.5s1-5.9 3.6-8.5Z"/></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9 8.5h6l-6 7h6"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="7" rx="2.5"/><rect x="3.5" y="13" width="17" height="7" rx="2.5"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.3-4.6L4 8.5"/><path d="M4 4v4.5h4.5"/><path d="M4 13a8 8 0 0 0 14.3 4.6l1.7-2.1"/><path d="M20 20v-4.5h-4.5"/></symbol>
+    <symbol id="i-devices" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="14" height="10" rx="2"/><path d="M1.5 18.5h11"/><rect x="16" y="9" width="6" height="11" rx="1.6"/></symbol>
+    <symbol id="i-chain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15.5" r="3.8"/><path d="m10.8 12.7 8.7-8.7M16 7.5l2.5 2.5M13.5 10l2 2"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5c1.6 0 3 .4 4.2 1M21.5 12S18 18.5 12 18.5c-1.6 0-3-.4-4.2-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18"/></symbol>
+    <symbol id="i-news" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 9h9M7.5 12.5h9M7.5 16h5"/></symbol>
+    <symbol id="i-cursor" viewBox="0 0 24 24"><path d="M5 3.5 19 11l-6.2 1.6L10 19Z" fill="currentColor" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="p-laptop" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><rect x="12" y="13" width="40" height="28" rx="4"/><path d="M5 47h54l-3 4.5H8Z"/></symbol>
+    <symbol id="p-win" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><rect x="10" y="10" width="19.5" height="19.5" rx="4"/><rect x="34.5" y="10" width="19.5" height="19.5" rx="4"/><rect x="10" y="34.5" width="19.5" height="19.5" rx="4"/><rect x="34.5" y="34.5" width="19.5" height="19.5" rx="4"/></symbol>
+    <symbol id="p-phone" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><rect x="17" y="5" width="30" height="54" rx="7"/><path d="M28 51h8"/></symbol>
+    <symbol id="p-globe" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="32" cy="32" r="23"/><path d="M9 32h46"/><path d="M32 9c7 7 9.5 15 9.5 23S39 48 32 55c-7-7-9.5-15-9.5-23S25 16 32 9Z"/></symbol>
+  </defs>
+</svg>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="Zali — наверх"><img src="logo.svg" alt="" width="30" height="30">Zali</a>
+    <nav class="nav-links" aria-label="Разделы">
+      <a href="#features">Возможности</a>
+      <a href="#privacy">Приватность</a>
+      <a href="#download">Скачать</a>
+      <a href="#faq">Вопросы</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="btn btn-ghost btn-sm" href="/web/">Открыть в браузере<svg class="go"><use href="#i-out"/></svg></a>
+      <a class="btn btn-primary btn-sm" href="#download"><svg><use href="#i-dl"/></svg>Скачать</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <!-- ═══ Первый экран ═══ -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <a class="ver" href="#download" id="verPill" hidden><b id="verPillNum">0.2</b><span id="verPillText">актуальная версия</span></a>
+        <h1>Переписки, сообщества и звонки в одном приложении</h1>
+        <p class="lead">Личные сообщения шифруются на ваших устройствах. Для регистрации нужны только <b>ник и пароль</b> — без номера телефона и почты. Работает на Mac, Windows, Android и в браузере.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#download" id="heroDl">
+            <svg><use href="#i-dl"/></svg>
+            <span class="btn-lines"><span id="heroDlLabel">Скачать Zali</span><small id="heroDlSub">macOS · Windows · Android</small></span>
+          </a>
+          <a class="btn btn-ghost" href="/web/" id="heroWeb">Открыть в браузере<svg class="go"><use href="#i-out"/></svg></a>
+        </div>
+        <div class="also" id="also">Другие платформы: <a href="#dl-macos">macOS</a><span class="sep">·</span><a href="#dl-windows">Windows</a><span class="sep">·</span><a href="#dl-android">Android</a><span class="sep">·</span><a href="#dl-web">iPhone и iPad</a></div>
+      </div>
+
+      <div class="stage" id="stage" aria-hidden="true">
+      <div class="app-win" id="appWin">
+        <div class="win-bar"><i></i><i></i><i></i><span>Zali</span></div>
+        <div class="win-body">
+          <div class="rail">
+            <div class="sv dm"><svg><use href="#i-chat"/></svg></div>
+            <div class="sep"></div>
+            <div class="sv" style="background:#6d5dfc">К<span class="dot">3</span></div>
+            <div class="sv" style="background:#e8763a">G</div>
+            <div class="sv" style="background:#11a37f">Д</div>
+          </div>
+          <div class="side">
+            <div class="search"><svg><use href="#i-search"/></svg><span>Поиск</span></div>
+            <div class="ct active"><div class="ava" style="background:#d9548a">А</div><div><b>Андрей</b><small id="sidePreview">Вы: Договорились</small></div></div>
+            <div class="ct"><div class="ava" style="background:#3a8df0">И</div><div><b>Игорь</b><small class="play">Играет в Factorio</small></div></div>
+            <div class="ct"><div class="ava" style="background:#6d5dfc">К</div><div><b>Команда</b><small>Марьяна: билд 0.4 залит</small></div><span class="badge">3</span></div>
+            <div class="ct"><div class="ava" style="background:#11a37f">Д</div><div><b>Даниил</b><small>Фото</small></div></div>
+            <div class="ct"><div class="ava" style="background:#e8763a">М</div><div><b>Марьяна</b><small>Стикер</small></div></div>
+            <div class="ct"><div class="ava" style="background:#17a2b8">М</div><div><b>Матвей</b><small>Голосовое · 0:24</small></div></div>
+          </div>
+          <div class="chat">
+            <div class="chat-head">
+              <div class="ava" style="background:#d9548a">А</div>
+              <div><b>Андрей</b><small><svg><use href="#i-lock"/></svg>Сквозное шифрование</small></div>
+              <div class="icons"><span><svg><use href="#i-phone"/></svg></span><span><svg><use href="#i-video"/></svg></span></div>
+            </div>
+            <div class="msgs" id="msgs">
+              <div class="day">Сегодня</div>
+              <div class="m in"><div class="bub">Созвонимся вечером? Покажу новый макет<time>17:52</time></div></div>
+              <div class="m out"><div class="bub">Давай в 8, кину ссылку в канал<time>17:53</time></div></div>
+              <div class="m in"><div class="bub">Только включи демонстрацию экрана, у меня второй монитор<time>17:55</time></div><span class="react">👍 1</span></div>
+              <div class="m out"><div class="bub">Договорились<time>17:55</time></div></div>
+            </div>
+            <div class="composer"><div class="field"><span id="draft">Сообщение</span><i class="caret"></i></div><div class="send"><svg><use href="#i-send"/></svg></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="float f-call">
+        <div class="fc-title"><span class="live">Голосовой · Команда</span><small id="callTimer">12:48</small></div>
+        <div class="call-avas"><div class="ava speakable" style="background:#d9548a">А</div><div class="ava speakable" style="background:#3a8df0">И</div><div class="ava speakable" style="background:#e8763a">М</div></div>
+        <div class="call-ctl"><span><svg><use href="#i-mic"/></svg></span><span class="on"><svg><use href="#i-screen"/></svg></span><span class="end"><svg><use href="#i-end"/></svg></span></div>
+      </div>
+      <div class="float f-game"><div class="ava" style="background:#3a8df0">И</div>Игорь <em>играет в Factorio</em><svg><use href="#i-pad"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Возможности ═══ -->
+  <section id="features">
+    <div class="wrap">
+      <div class="rv sec-head">
+        <div class="eyebrow">Возможности</div>
+        <h2>Что есть в Zali</h2>
+        <p>Интерфейс один на всех устройствах: всё ниже работает и в приложениях, и в браузере.</p>
+      </div>
+
+      <div class="rv show" id="show-chats">
+        <div class="tab-copy">
+          <div class="tile-glyph"><svg><use href="#i-chat"/></svg></div>
+          <h3>Личные переписки</h3>
+          <p>Один на один, со сквозным шифрованием: сообщения и вложения расшифровываются только на устройствах участников.</p>
+          <ul class="checks">
+            <li><svg><use href="#i-check"/></svg><div><b>Ответы и пересылка.</b> <span>Цитата конкретного сообщения, пересылка в другой чат.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Правка и удаление.</b> <span>Исправленное сообщение помечается «изменено» у обоих.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Реакции, стикеры и GIF.</b> <span>Анимированные стикеры и поиск GIF прямо из поля ввода.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Фото, видео и файлы.</b> <span>Вложения шифруются так же, как текст.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Несколько устройств.</b> <span>Новое устройство получает ключи после одобрения с того, где вы уже вошли.</span></div></li>
+          </ul>
+        </div>
+        <div class="panel chatp" aria-hidden="true">
+          <div class="panel-head"><div class="ava" style="background:#d9548a">А</div><div><b>Андрей</b><br><small>в сети</small></div></div>
+          <div class="pv-chat">
+            <div class="row in"><div class="media"><div class="art"><svg viewBox="0 0 230 120" preserveAspectRatio="xMidYMid slice"><rect width="230" height="120" fill="#1e2130"/><rect width="230" height="14" fill="#262a3d"/><circle cx="9" cy="7" r="2" fill="#e8763a"/><circle cx="16" cy="7" r="2" fill="#f2c14e"/><circle cx="23" cy="7" r="2" fill="#11a37f"/><rect x="18" y="30" width="86" height="9" rx="4.5" fill="#f2f2f2"/><rect x="18" y="45" width="64" height="9" rx="4.5" fill="#f2f2f2"/><rect x="18" y="64" width="78" height="4" rx="2" fill="#6b708a"/><rect x="18" y="72" width="58" height="4" rx="2" fill="#6b708a"/><rect x="18" y="88" width="46" height="16" rx="8" fill="#cbff00"/><rect x="144" y="26" width="58" height="82" rx="10" fill="#2c3147"/><rect x="150" y="34" width="46" height="30" rx="6" fill="#6d5dfc"/><rect x="150" y="70" width="30" height="5" rx="2.5" fill="#8a90ab"/><rect x="150" y="80" width="46" height="5" rx="2.5" fill="#4a5070"/><rect x="150" y="90" width="38" height="5" rx="2.5" fill="#4a5070"/></svg></div><div class="cap">главная_v3.png<span>2,1 МБ</span></div></div><div class="reacts"><span class="react">🔥 2</span><span class="react own">😍 1</span></div></div>
+            <div class="row out"><div class="bub out"><div class="quote"><b>Андрей</b>Фото · главная_v3.png</div>Отлично. Кнопку бы крупнее<span class="edited">изменено</span><time>18:04</time></div></div>
+            <div class="row in"><div class="file"><div class="tile-glyph"><svg><use href="#i-file"/></svg></div><div><b>бриф_финал.pdf</b><small>480 КБ · PDF</small></div><span class="dl"><svg><use href="#i-dl"/></svg></span></div></div>
+            <div class="ctx">
+              <div class="ctx-r"><span>❤️</span><span>🔥</span><span>😂</span><span>👍</span><span>😮</span></div>
+              <div class="ctx-i hl"><svg><use href="#i-reply"/></svg>Ответить</div>
+              <div class="ctx-i"><svg><use href="#i-edit"/></svg>Изменить</div>
+              <div class="ctx-i"><svg><use href="#i-fwd"/></svg>Переслать</div>
+              <div class="ctx-i danger"><svg><use href="#i-trash"/></svg>Удалить</div>
+            </div>
+          </div>
+          <div class="pv-composer">
+            <div class="reply-to"><div class="reply-bar"><svg><use href="#i-reply"/></svg>Ответ <b>Андрею</b></div><div class="field"><span>Сообщение</span></div></div>
+            <div class="send"><svg><use href="#i-send"/></svg></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rv show flip" id="show-servers">
+        <div class="tab-copy">
+          <div class="tile-glyph"><svg><use href="#i-people"/></svg></div>
+          <h3>Серверы сообществ</h3>
+          <p>Для друзей, команды или клуба. Участники приходят по ссылке-приглашению.</p>
+          <ul class="checks">
+            <li><svg><use href="#i-check"/></svg><div><b>Текстовые и голосовые каналы.</b> <span>Каналы под каждую тему; в голосовой заходят одним нажатием.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Роли и права.</b> <span>Кто управляет каналами, кто модерирует, кто может писать.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Правила и жалобы.</b> <span>Правила при вступлении, жалоба на сообщение уходит модераторам.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Казна сервера.</b> <span>Счёт в ZaliCoin для розыгрышей и подарков участникам.</span></div></li>
+          </ul>
+        </div>
+        <div class="panel pv-srv" aria-hidden="true">
+          <div class="rail">
+            <div class="sv dm"><svg><use href="#i-chat"/></svg></div>
+            <div class="sep"></div>
+            <div class="sv on" style="background:#6d5dfc">К</div>
+            <div class="sv" style="background:#e8763a">G</div>
+            <div class="sv" style="background:#11a37f">Д</div>
+          </div>
+          <div class="chs">
+            <div class="chs-head">Команда<svg><use href="#i-chev-d"/></svg></div>
+            <div class="cat">Текстовые</div>
+            <div class="ch on"><svg><use href="#i-hash"/></svg>общий</div>
+            <div class="ch"><svg><use href="#i-hash"/></svg>анонсы<span class="badge">2</span></div>
+            <div class="ch"><svg><use href="#i-hash"/></svg>дизайн</div>
+            <div class="cat">Голосовые</div>
+            <div class="ch"><svg><use href="#i-vol"/></svg>Планёрка</div>
+            <div class="vu"><i class="speakable" style="background:#d9548a"></i>Андрей</div>
+            <div class="vu"><i class="speakable" style="background:#3a8df0"></i>Игорь<svg><use href="#i-screen"/></svg></div>
+            <div class="vu"><i class="speakable" style="background:#e8763a"></i>Марьяна</div>
+          </div>
+          <div class="srv-feed">
+            <div class="panel-head"><svg><use href="#i-hash"/></svg><b>общий</b><small>· 18 участников</small></div>
+            <div class="posts">
+              <div class="post"><div class="ava" style="background:#e8763a">М</div><div><div class="who">Марьяна <span class="role">Админ</span><small>19:20</small></div><p>Билд 0.4 залит, тестим всей командой</p></div></div>
+              <div class="post"><div class="ava" style="background:#3a8df0">И</div><div><div class="who">Игорь <span class="role">Модератор</span><small>19:22</small></div><p>Я в «Планёрке», показываю экран — подключайтесь</p></div></div>
+              <div class="post"><div class="ava" style="background:#11a37f">Д</div><div><div class="who">Даниил <small>19:25</small></div><p>Позову Мишу:</p>
+                <div class="invite"><div class="sv" style="background:#6d5dfc">К</div><div><b>Команда</b><small>Приглашение на сервер</small></div><span class="go">Вступить</span></div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rv show" id="show-calls">
+        <div class="tab-copy">
+          <div class="tile-glyph"><svg><use href="#i-phone"/></svg></div>
+          <h3>Звонки</h3>
+          <p>В личке и в голосовых каналах серверов. Камера, экран и совместная работа — в одном окне звонка.</p>
+          <ul class="checks">
+            <li><svg><use href="#i-check"/></svg><div><b>Голос и камера.</b> <span>На macOS и Windows звук захватывает само приложение, поэтому система не приглушает собеседников.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Демонстрация экрана.</b> <span>Окно или весь экран.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Удалённое управление.</b> <span>Участник может попросить управлять показанным экраном. Доступ выдаёт и забирает тот, кто показывает.</span></div></li>
+            <li><svg><use href="#i-check"/></svg><div><b>Общий браузер.</b> <span>Отдельный браузер, которым управляют все участники звонка, у каждого свой курсор. Изолирован от мессенджера и вашей системы.</span></div></li>
+          </ul>
+        </div>
+        <div class="panel pv-call" aria-hidden="true">
+          <div class="call-stage">
+            <div class="screen-tile">
+              <div class="desk">
+                <div class="desk-url"><i></i><i></i><i></i><span>Общий браузер · билеты на август</span></div>
+                <div class="desk-page"><div class="hb"><u style="width:30%"></u><u style="width:16%;margin-left:auto"></u></div><div class="tk"><b style="background:#6d5dfc"></b><u></u><u></u></div><div class="tk sel"><b style="background:#e8763a"></b><u></u><u></u></div><div class="tk"><b style="background:#11a37f"></b><u></u><u></u></div><div class="hb ft"><u style="width:22%"></u><u style="width:12%"></u><u style="width:12%;margin-left:auto"></u></div></div>
+              </div>
+              <div class="cur c1" style="left:22%;top:46%;color:#d9548a"><svg><use href="#i-cursor"/></svg><span style="background:#d9548a">Андрей</span></div>
+              <div class="cur c2" style="left:58%;top:58%;color:#3a8df0"><svg><use href="#i-cursor"/></svg><span style="background:#3a8df0">Игорь</span></div>
+              <div class="tag"><svg><use href="#i-globe"/></svg>Запустил Андрей</div>
+            </div>
+            <div class="people">
+              <div class="ptile"><div class="ava speakable" style="background:#d9548a">А</div><label>Андрей</label></div>
+              <div class="ptile"><div class="ava speakable" style="background:#3a8df0">И</div><label>Игорь</label><div class="wave"><i></i><i></i><i></i><i></i></div></div>
+              <div class="ptile"><div class="ava" style="background:#e8763a">М</div><label>Марьяна</label><span class="muted"><svg><use href="#i-mic-off"/></svg></span></div>
+            </div>
+          </div>
+          <div class="call-bar">
+            <div class="info">Планёрка · Команда<small class="num" id="callTimer2">24:18</small></div>
+            <div class="ctl"><span><svg><use href="#i-mic"/></svg></span><span><svg><use href="#i-video"/></svg></span><span><svg><use href="#i-screen"/></svg></span><span class="on"><svg><use href="#i-globe"/></svg></span><span class="end"><svg><use href="#i-end"/></svg></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rv more">
+        <div class="mtile"><div class="tile-glyph"><svg><use href="#i-pad"/></svg></div><div><b>«Играет в …»</b><span>Статус с названием игры. Пока вы играете, уведомления приходят тихо.</span></div></div>
+        <div class="mtile"><div class="tile-glyph"><svg><use href="#i-puzzle"/></svg></div><div><b>Аддоны</b><span>Расширения в песочнице. Каждое показывает, какие разрешения просит.</span></div></div>
+        <div class="mtile"><div class="tile-glyph"><svg><use href="#i-coin"/></svg></div><div><b>ZaliCoin</b><span>Переводы между пользователями и подарочные карточки.</span></div></div>
+        <div class="mtile"><div class="tile-glyph"><svg><use href="#i-palette"/></svg></div><div><b>Оформление</b><span>10 цветовых схем; светлая, тёмная тема или как в системе.</span></div></div>
+        <div class="mtile"><div class="tile-glyph"><svg><use href="#i-refresh"/></svg></div><div><b>Автообновления</b><span>На macOS, Windows и Android. Каналы: release, beta или alpha.</span></div></div>
+        <div class="mtile"><div class="tile-glyph"><svg><use href="#i-server"/></svg></div><div><b>Свой сервер</b><span>Код открыт, сервер на Rust запускается в Docker.</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Приватность ═══ -->
+  <section id="privacy">
+    <div class="wrap">
+      <div class="rv sec-head">
+        <div class="eyebrow">Приватность</div>
+        <h2>Что шифруется и кто что видит</h2>
+        <p>По каждому виду данных — без общих слов.</p>
+      </div>
+      <figure class="rv scheme" aria-label="Как личное сообщение проходит от отправителя к получателю">
+        <div class="sch-flow">
+          <div class="sch-node">
+            <div class="sch-who"><div class="ava" style="background:#3a8df0">М</div><div><b>Максим</b><small>Устройство отправителя</small></div></div>
+            <div class="sch-msg out">Увидимся в 8?</div>
+            <span class="sch-chip"><svg><use href="#i-key"/></svg>Ключ переписки</span>
+            <div class="sch-step"><svg><use href="#i-lock"/></svg>Шифрует сообщение на устройстве · AES-256-GCM</div>
+          </div>
+          <div class="sch-link" aria-hidden="true"><span>шифротекст</span><i></i></div>
+          <div class="sch-node srv">
+            <div class="sch-who"><div class="tile-glyph"><svg><use href="#i-server"/></svg></div><div><b>Сервер</b><small>Передаёт и хранит</small></div></div>
+            <div class="sch-msg cipher">9f3a c71e 04b8 d25a 7e61 b3f0 …</div>
+            <span class="sch-chip no"><svg><use href="#i-eye-off"/></svg>Ключа нет</span>
+            <div class="sch-step"><svg><use href="#i-eye-off"/></svg>Видит только шифротекст и служебные данные</div>
+          </div>
+          <div class="sch-link" aria-hidden="true"><span>шифротекст</span><i></i></div>
+          <div class="sch-node">
+            <div class="sch-who"><div class="ava" style="background:#e8763a">Е</div><div><b>Евгений</b><small>Устройство получателя</small></div></div>
+            <div class="sch-msg in">Увидимся в 8?</div>
+            <span class="sch-chip"><svg><use href="#i-key"/></svg>Ключ переписки</span>
+            <div class="sch-step"><svg><use href="#i-lock"/></svg>Расшифровывает тем же ключом</div>
+          </div>
+        </div>
+        <div class="sch-key">
+          <div class="tile-glyph"><svg><use href="#i-key"/></svg></div>
+          <div><b>Ключ есть только у участников переписки</b><span>Он хранится на их устройствах, серверу он неизвестен. Новое устройство получает ключ после того, как вы одобрите его с уже вошедшего.</span></div>
+        </div>
+        <figcaption class="sch-note">Схема для личных сообщений. Каналы серверов защищены при передаче, но не сквозным шифрованием — см. таблицу ниже.</figcaption>
+      </figure>
+      <div class="rv ptable">
+        <div class="prow head"><div>Данные</div><div class="how">Как защищены</div><div class="who">Кто может прочитать</div></div>
+        <div class="prow">
+          <div class="what"><div class="tile-glyph"><svg><use href="#i-lock"/></svg></div>Личные сообщения и вложения</div>
+          <div class="how"><span class="pill-ok">Сквозное</span>Шифруются на устройстве отправителя (AES-256-GCM), сервер хранит только шифротекст.</div>
+          <div class="who"><b>Только участники</b> переписки.</div>
+        </div>
+        <div class="prow">
+          <div class="what"><div class="tile-glyph"><svg><use href="#i-hash"/></svg></div>Каналы серверов</div>
+          <div class="how"><span class="pill-warn">Не сквозное</span>Защищены при передаче, но ключ канала может получить и сервер.</div>
+          <div class="who">Участники сервера и, технически, сервер.</div>
+        </div>
+        <div class="prow">
+          <div class="what"><div class="tile-glyph"><svg><use href="#i-phone"/></svg></div>Звонки</div>
+          <div class="how">Шифруются при передаче (WebRTC, DTLS-SRTP). Видео в групповых звонках идёт через сервер.</div>
+          <div class="who">Участники звонка.</div>
+        </div>
+        <div class="prow">
+          <div class="what"><div class="tile-glyph"><svg><use href="#i-eye"/></svg></div>Служебные данные</div>
+          <div class="how">Ник, с кем вы переписываетесь, на каких серверах состоите, время сообщений — без этого сервер не доставит сообщение.</div>
+          <div class="who">Сервер.</div>
+        </div>
+        <div class="prow">
+          <div class="what"><div class="tile-glyph"><svg><use href="#i-devices"/></svg></div>Ключи на новом устройстве</div>
+          <div class="how">Передаются только после того, как вы одобрите устройство с уже вошедшего.</div>
+          <div class="who">Ваши устройства.</div>
+        </div>
+        <div class="prow">
+          <div class="what"><div class="tile-glyph"><svg><use href="#i-chain"/></svg></div>История переписки</div>
+          <div class="how">Каждая отправка, правка и удаление записываются в цепочку SHA-256 — тихо удалить или переставить сообщение нельзя.</div>
+          <div class="who">Участники могут проверить цепочку.</div>
+        </div>
+        <div class="prow">
+          <div class="what"><div class="tile-glyph"><svg><use href="#i-shield"/></svg></div>Обновления</div>
+          <div class="how">Каждый релиз подписан ключом разработчиков (ES256). Обновление без подписи приложение не устанавливает.</div>
+          <div class="who">—</div>
+        </div>
+      </div>
+      <p class="pnote">Исходный код клиента и сервера открыт: <a class="link" href="https://github.com/zalikuska/zali-messenger" rel="noopener">github.com/zalikuska/zali-messenger</a>.</p>
+    </div>
+  </section>
+
+  <!-- ═══ Скачать ═══ -->
+  <section id="download">
+    <div class="wrap">
+      <div class="rv sec-head">
+        <div class="eyebrow">Скачать</div>
+        <h2>Установка и требования</h2>
+        <p>Аккаунт один на все устройства. Номер версии и ссылку на файл страница получает с сервера обновлений.</p>
+      </div>
+      <div class="rv plats">
+        <div class="plat" id="dl-macos" data-plat="macos">
+          <div class="plat-top"><svg class="art"><use href="#p-laptop"/></svg><div><strong>macOS <span class="mine">Ваша система</span></strong><small data-meta>Приложение для Mac</small></div></div>
+          <dl class="specs">
+            <div><dt>Система</dt><dd>macOS 13 Ventura и новее</dd></div>
+            <div><dt>Файл</dt><dd>Архив .zip — распакуйте и перенесите Zali в «Программы»</dd></div>
+            <div><dt>Первый запуск</dt><dd>Если macOS скажет, что не может проверить разработчика: правый клик по Zali → «Открыть»</dd></div>
+          </dl>
+          <a class="btn btn-ghost" href="#dl-macos" data-dl="macos"><svg><use href="#i-dl"/></svg>Скачать для macOS</a>
+        </div>
+        <div class="plat" id="dl-windows" data-plat="windows">
+          <div class="plat-top"><svg class="art"><use href="#p-win"/></svg><div><strong>Windows <span class="mine">Ваша система</span></strong><small data-meta>Приложение для ПК</small></div></div>
+          <dl class="specs">
+            <div><dt>Система</dt><dd>Windows 10 или 11, 64-бит</dd></div>
+            <div><dt>Нужно</dt><dd>Microsoft Edge WebView2 — в Windows 11 уже есть; если нет, установщик предложит скачать</dd></div>
+            <div><dt>Первый запуск</dt><dd>Если SmartScreen остановит установщик: «Подробнее» → «Выполнить в любом случае»</dd></div>
+          </dl>
+          <a class="btn btn-ghost" href="#dl-windows" data-dl="windows"><svg><use href="#i-dl"/></svg>Скачать для Windows</a>
+        </div>
+        <div class="plat" id="dl-android" data-plat="android">
+          <div class="plat-top"><svg class="art"><use href="#p-phone"/></svg><div><strong>Android <span class="mine">Ваша система</span></strong><small data-meta>Приложение для телефона</small></div></div>
+          <dl class="specs">
+            <div><dt>Система</dt><dd>Android 8.0 и новее</dd></div>
+            <div><dt>Файл</dt><dd>APK — при установке разрешите браузеру устанавливать приложения</dd></div>
+            <div><dt>Плюсы</dt><dd>Push-уведомления и звонки в фоне</dd></div>
+          </dl>
+          <a class="btn btn-ghost" href="#dl-android" data-dl="android"><svg><use href="#i-dl"/></svg>Скачать для Android</a>
+        </div>
+        <div class="plat" id="dl-web" data-plat="web">
+          <div class="plat-top"><svg class="art"><use href="#p-globe"/></svg><div><strong>Браузер <span class="mine">Ваша система</span></strong><small>msg.zalikus.org/web</small></div></div>
+          <dl class="specs">
+            <div><dt>Система</dt><dd>Любая, со свежим Chrome, Edge, Safari или Firefox</dd></div>
+            <div><dt>iPhone и iPad</dt><dd>Откройте в Safari → «Поделиться» → «На экран Домой» — Zali запустится как приложение</dd></div>
+            <div><dt>Отличия</dt><dd>Без установки и обновлений — всегда последняя версия</dd></div>
+          </dl>
+          <a class="btn btn-ghost" href="/web/"><svg><use href="#i-out"/></svg>Открыть в браузере</a>
+        </div>
+      </div>
+      <div class="notes" id="notes" hidden>
+        <div class="tile-glyph"><svg><use href="#i-news"/></svg></div>
+        <div><b id="notesTitle">Что нового</b><pre id="notesText"></pre></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Как начать ═══ -->
+  <section id="start">
+    <div class="wrap">
+      <div class="rv sec-head">
+        <div class="eyebrow">Как начать</div>
+        <h2>Три шага до первого сообщения</h2>
+      </div>
+      <div class="rv steps">
+        <div class="step"><b>Установите или откройте</b><span>Скачайте приложение для своей системы или откройте <a class="link" href="/web/">веб-версию</a>.</span></div>
+        <div class="step"><b>Придумайте ник и пароль</b><span>Ник — от 3 до 32 символов: латиница, цифры, <code>_</code> и <code>-</code>. Телефон и почта не нужны.</span></div>
+        <div class="step"><b>Найдите своих</b><span>Начните переписку по нику друга или вступите на сервер по ссылке-приглашению.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ FAQ ═══ -->
+  <section id="faq">
+    <div class="wrap faq-grid">
+      <div class="rv sec-head">
+        <div class="eyebrow">Вопросы</div>
+        <h2>Частые вопросы</h2>
+      </div>
+      <div class="rv faq">
+        <details open>
+          <summary>Нужен ли номер телефона или почта?<i><svg><use href="#i-chev-d"/></svg></i></summary>
+          <p>Нет. Аккаунт — это ник и пароль. Поэтому пароль стоит сохранить: без почты восстановить его по ссылке не получится.</p>
+        </details>
+        <details>
+          <summary>Чем приложение отличается от веб-версии?<i><svg><use href="#i-chev-d"/></svg></i></summary>
+          <p>Возможности одинаковые. Приложения добавляют системные уведомления и автообновления, на macOS и Windows — захват звука и экрана самим приложением, на Android — push-уведомления и звонки в фоне.</p>
+        </details>
+        <details>
+          <summary>Можно ли пользоваться на нескольких устройствах?<i><svg><use href="#i-chev-d"/></svg></i></summary>
+          <p>Да. Войдите на новом устройстве и одобрите его с того, где вы уже вошли, — ключи личных переписок перейдут на новое устройство.</p>
+        </details>
+        <details>
+          <summary>Сменил устройство и не вижу старые сообщения. Что делать?<i><svg><use href="#i-chev-d"/></svg></i></summary>
+          <p>Если старого устройства под рукой нет, откройте меню собеседника и выберите «Восстановить переписку». Как только он появится в сети, его приложение само пришлёт ключи этой переписки.</p>
+        </details>
+        <details>
+          <summary>Видит ли сервер мои сообщения?<i><svg><use href="#i-chev-d"/></svg></i></summary>
+          <p>Личные — нет: сервер хранит их в зашифрованном виде. Каналы серверов шифруются не сквозь, и сервер технически может их прочитать. Подробно — в разделе <a class="link" href="#privacy">«Приватность»</a>.</p>
+        </details>
+        <details>
+          <summary>Можно ли поднять свой сервер?<i><svg><use href="#i-chev-d"/></svg></i></summary>
+          <p>Да. Сервер написан на Rust и запускается через Docker Compose; инструкция — <code>docs/DOCKER.md</code> в <a class="link" href="https://github.com/zalikuska/zali-messenger" rel="noopener">репозитории</a>.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="rv final">
+        <img src="logo.svg" alt="">
+        <div><b>Zali Messenger</b><span>macOS, Windows, Android и браузер</span></div>
+        <a class="btn btn-ghost" href="/web/">Открыть в браузере<svg class="go"><use href="#i-out"/></svg></a>
+        <a class="btn btn-primary" href="#download" id="finalDl"><svg><use href="#i-dl"/></svg><span id="finalDlLabel">Скачать</span></a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <a class="brand" href="#top"><img src="logo.svg" alt="" width="26" height="26">Zali</a>
+    <nav aria-label="Ссылки">
+      <a href="/web/">Веб-версия</a>
+      <a href="https://github.com/zalikuska/zali-messenger" rel="noopener">Исходный код</a>
+      <a href="https://github.com/zalikuska/zali-messenger/blob/main/docs/legal/TERMS.md" rel="noopener">Условия</a>
+      <a href="https://github.com/zalikuska/zali-messenger/blob/main/docs/legal/PRIVACY.md" rel="noopener">Конфиденциальность</a>
+    </nav>
+    <div class="copy">© 2026 Zali Messenger</div>
+  </div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+  // Сервер обновлений. ?api=… — для локальной проверки; по умолчанию прод.
+  const params = new URLSearchParams(location.search);
+  const API = (params.get("api") || "https://msgs.zalikus.org").replace(/\/+$/, "");
+  const WEB = "/web/";
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  document.documentElement.classList.add("js");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* Тема — системная (CSS, prefers-color-scheme). Выбор прежнего ручного
+     переключателя больше ничего не значит — стираем, чтобы не копился. */
+  try { localStorage.removeItem("zali-site-theme"); } catch (_) {}
+
+  /* ── Линия под шапкой при прокрутке ── */
+  const nav = $("#nav");
+  const onScroll = () => nav.classList.toggle("scrolled", scrollY > 4);
+  addEventListener("scroll", onScroll, { passive: true }); onScroll();
+
+  /* ── Подсветка текущего раздела в шапке ── */
+  const links = $$(".nav-links a");
+  const targets = links.map(a => $(a.getAttribute("href"))).filter(Boolean);
+  if ("IntersectionObserver" in window && targets.length) {
+    const seen = new Set();
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) e.isIntersecting ? seen.add(e.target) : seen.delete(e.target);
+      const cur = targets.find(t => seen.has(t));
+      links.forEach(a => {
+        if (cur && a.getAttribute("href") === "#" + cur.id) a.setAttribute("aria-current", "true");
+        else a.removeAttribute("aria-current");
+      });
+    }, { rootMargin: "-35% 0px -55% 0px" });
+    targets.forEach(t => io.observe(t));
+  }
+
+
+  /* ── Появление блоков и «живые» макеты только в зоне видимости ── */
+  const reveal = new IntersectionObserver((ents) => {
+    for (const en of ents) if (en.isIntersecting) { en.target.classList.add("shown"); reveal.unobserve(en.target); }
+  }, { threshold: .1, rootMargin: "0px 0px -40px 0px" });
+  $$(".rv").forEach(el => reveal.observe(el));
+  const live = new IntersectionObserver((ents) => {
+    for (const en of ents) en.target.classList.toggle("in-view", en.isIntersecting);
+  }, { threshold: .25 });
+  $$(".show").forEach(el => live.observe(el));
+
+  /* ── Наклон окна за курсором ── */
+  const stage = $("#stage"), win = $("#appWin"), floats = $$(".float", stage);
+  if (matchMedia("(pointer: fine)").matches && !reduced) {
+    let raf = 0, mx = 0, my = 0;
+    addEventListener("pointermove", (e) => {
+      mx = e.clientX; my = e.clientY;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (innerWidth <= 1020) return;
+        const r = stage.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > innerHeight) return;
+        const nx = Math.max(-1, Math.min(1, (mx - r.left - r.width / 2) / (r.width / 2)));
+        const ny = Math.max(-1, Math.min(1, (my - r.top - r.height / 2) / (r.height / 2)));
+        win.style.setProperty("--ry", `${-6 + nx * 5}deg`);
+        win.style.setProperty("--rx", `${3 - ny * 4}deg`);
+        floats.forEach((f, i) => { const d = i ? 20 : 14; f.style.transform = `translate3d(${nx * d}px, ${ny * d}px, 0)`; });
+      });
+    }, { passive: true });
+  }
+
+  /* ── Живой чат в окне первого экрана ── */
+  const msgs = $("#msgs"), draft = $("#draft"), sidePreview = $("#sidePreview");
+  const SCRIPT = [
+    { side: "in", text: "Созвонимся вечером? Покажу новый макет" },
+    { side: "out", text: "Давай в 8, кину ссылку в канал" },
+    { side: "in", text: "Только включи демонстрацию экрана, у меня второй монитор", react: "👍" },
+    { side: "out", text: "Договорились. И общий браузер запустим" },
+    { side: "in", text: "Отлично, Марьяна тоже подключится" }
+  ];
+  const pad = (n) => String(n).padStart(2, "0");
+  const clock = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+  const esc = (t) => t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  function addMsg(m) {
+    const el = document.createElement("div");
+    el.className = `m ${m.side} pop`;
+    el.innerHTML = `<div class="bub">${esc(m.text)}<time>${clock()}</time></div>`;
+    msgs.appendChild(el);
+    const all = $$(".m, .typing, .day", msgs);
+    if (all.length > 6) all[0].remove();
+    return el;
+  }
+  async function typeDraft(text) {
+    for (let i = 1; i <= text.length; i++) { draft.textContent = text.slice(0, i); draft.style.opacity = 1; await wait(26 + Math.random() * 30); }
+    await wait(250);
+    draft.textContent = "Сообщение"; draft.style.opacity = "";
+  }
+  let chatVisible = true;
+  async function runChat() {
+    for (;;) {
+      $$(".m, .day", msgs).forEach((el, i) => setTimeout(() => el.classList.add("leave"), i * 50));
+      await wait(600);
+      msgs.innerHTML = '<div class="day">Сегодня</div>';
+      for (const m of SCRIPT) {
+        while (!chatVisible || document.hidden) await wait(400);
+        if (m.side === "in") {
+          const ty = document.createElement("div"); ty.className = "typing"; ty.innerHTML = "<i></i><i></i><i></i>";
+          msgs.appendChild(ty);
+          await wait(900 + m.text.length * 16);
+          ty.remove();
+          const el = addMsg(m);
+          sidePreview.textContent = m.text;
+          if (m.react) setTimeout(() => { const r = document.createElement("span"); r.className = "react pop"; r.textContent = `${m.react} 1`; el.appendChild(r); }, 1300);
+        } else {
+          await typeDraft(m.text);
+          addMsg(m);
+          sidePreview.textContent = "Вы: " + m.text;
+        }
+        await wait(900);
+      }
+      await wait(3600);
+    }
+  }
+  if (!reduced) {
+    new IntersectionObserver((e) => { chatVisible = e[0].isIntersecting; }).observe(stage);
+    setTimeout(runChat, 2200);
+  }
+
+  /* ── Звонки: таймеры и «кто говорит» ── */
+  const timers = [[$("#callTimer"), 12 * 60 + 48], [$("#callTimer2"), 24 * 60 + 18]];
+  setInterval(() => { for (const t of timers) { t[1]++; t[0].textContent = `${pad(Math.floor(t[1] / 60))}:${pad(t[1] % 60)}`; } }, 1000);
+  const groups = [$$(".f-call .speakable"), $$(".vu .speakable"), $$(".people .speakable")];
+  let spk = 0;
+  const paintSpeak = () => groups.forEach(g => g.forEach((a, i) => a.classList.toggle("speak", i === spk % g.length)));
+  paintSpeak();
+  if (!reduced) setInterval(() => { spk = (spk + 1 + (Math.random() < .4 ? 1 : 0)) % 6; paintSpeak(); }, 1800);
+
+  /* ── Платформа посетителя ── */
+  function detectPlatform() {
+    const ua = navigator.userAgent || "";
+    const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    if (/android/i.test(ua)) return "android";
+    if (/iPhone|iPad|iPod/i.test(ua) || (/Mac/i.test(p) && navigator.maxTouchPoints > 1)) return "ios";
+    if (/Win/i.test(p) || /Windows/i.test(ua)) return "windows";
+    if (/Mac/i.test(p) || /Mac OS X/i.test(ua)) return "macos";
+    return "other";
+  }
+  const PLATFORM = detectPlatform();
+  const NAMES = { macos: "macOS", windows: "Windows", android: "Android" };
+  const REQS = { macos: "macOS 13 и новее", windows: "Windows 10 и 11, 64-бит", android: "Android 8.0 и новее" };
+  const REQS_SHORT = { macos: "macOS 13+", windows: "Windows 10/11", android: "Android 8+" };
+  const native = !!NAMES[PLATFORM];
+  const mine = $(`.plat[data-plat="${native ? PLATFORM : "web"}"]`);
+  if (mine) mine.classList.add("is-mine");
+  const heroDl = $("#heroDl"), finalDl = $("#finalDl");
+  if (native) {
+    $("#heroDlLabel").textContent = `Скачать для ${NAMES[PLATFORM]}`;
+    $("#finalDlLabel").textContent = `Скачать для ${NAMES[PLATFORM]}`;
+    $("#heroDlSub").textContent = REQS[PLATFORM];
+    const own = $(`#also a[href="#dl-${PLATFORM}"]`);
+    if (own) { own.nextElementSibling?.remove(); own.remove(); }
+  } else {
+    // iPhone, iPad, Linux — нативной сборки нет: главная кнопка открывает веб-версию.
+    $("#heroDlLabel").textContent = "Открыть Zali";
+    $("#heroDlSub").textContent = PLATFORM === "ios" ? "Веб-версия · можно «На экран Домой»" : "Веб-версия в браузере";
+    $("#finalDlLabel").textContent = "Открыть Zali";
+    for (const a of [heroDl, finalDl]) { a.href = WEB; a.querySelector("use").setAttribute("href", "#i-out"); }
+    $("#heroWeb").style.display = "none";
+    finalDl.previousElementSibling.style.display = "none";
+  }
+
+  /* ── Актуальные сборки с сервера обновлений ── */
+  const releases = {};
+  const fmtDate = (ts) => {
+    if (!ts) return "";
+    try { return new Date(ts > 1e12 ? ts : ts * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }); } catch (_) { return ""; }
+  };
+  const extOf = (url) => ((url.split(/[?#]/)[0].match(/\.([a-z0-9]{2,4})$/i) || [])[1] || "").toLowerCase();
+  function applyRelease(platform, rel) {
+    if (!rel || !rel.downloadUrl || !rel.version) return;
+    let url;
+    try { url = new URL(rel.downloadUrl, API + "/").href; } catch (_) { return; }
+    if (!/^https?:/i.test(url)) return;
+    releases[platform] = { ...rel, url };
+    const card = $(`.plat[data-plat="${platform}"]`);
+    if (card) {
+      const btn = card.querySelector(`[data-dl="${platform}"]`);
+      btn.href = url; btn.setAttribute("download", "");
+      const ext = extOf(url), date = fmtDate(rel.publishedAt);
+      card.querySelector("[data-meta]").textContent = [`Версия ${rel.version}`, ext && "." + ext, date].filter(Boolean).join(" · ");
+    }
+    if (platform === PLATFORM) {
+      for (const a of [heroDl, finalDl]) { a.href = url; a.setAttribute("download", ""); }
+      $("#heroDlSub").textContent = `Версия ${rel.version} · ${REQS_SHORT[PLATFORM]}`;
+    }
+    // Плашка версии и «Что нового» — по своей платформе, иначе по самой свежей сборке.
+    const pick = releases[PLATFORM] || Object.values(releases).sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0))[0];
+    if (!pick) return;
+    $("#verPillNum").textContent = pick.version;
+    const text = String(pick.notes || "").trim();
+    if (text) {
+      $("#verPillText").textContent = "Что нового в этой версии";
+      $("#verPill").href = "#notes";
+      $("#notesTitle").textContent = `Что нового в ${pick.version}`;
+      $("#notesText").textContent = text;
+      $("#notes").hidden = false;
+    } else {
+      $("#verPillText").textContent = "актуальная версия";
+    }
+    $("#verPill").hidden = false;
+  }
+  for (const p of Object.keys(NAMES)) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    fetch(`${API}/api/version?platform=${p}&channels=a,b,r`, { signal: ctl.signal, credentials: "omit" })
+      .then(r => r.ok ? r.json() : null).then(rel => applyRelease(p, rel)).catch(() => {}).finally(() => clearTimeout(t));
+  }
+  window.ZaliLanding = { applyRelease };
+
+  // Пока сервер не дал ссылку на файл — кнопка платформы открывает веб-версию.
+  $$("[data-dl]").forEach(a => a.addEventListener("click", (e) => {
+    if (releases[a.dataset.dl]) return;
+    e.preventDefault(); location.href = WEB;
+  }));
+  for (const a of [heroDl, finalDl]) a.addEventListener("click", (e) => {
+    if (!native || releases[PLATFORM]) return;
+    e.preventDefault();
+    $(`#dl-${PLATFORM}`).scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+})();
+</script>
+</body>
+</html>

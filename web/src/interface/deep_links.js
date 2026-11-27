@@ -8,8 +8,8 @@
 // принимаются, но показывать и копировать мы больше их не будем.
 //
 // Откуда ссылка попадает в приложение:
-//   1) адресная строка веб-клиента (msg.zalikus.org/server/…) — запоминается и
-//      отрабатывается после входа;
+//   1) адресная строка веб-клиента (msg.zalikus.org/server/…, nginx перенаправляет
+//      её на msg.zalikus.org/web/server/…) — запоминается и отрабатывается после входа;
 //   2) клик по ссылке в сообщении — перехватывается, не уходит в браузер;
 //   3) «Войти по коду» — принимает и ссылку, и голый код.
 //
@@ -66,10 +66,14 @@ ZaliMixin(ZaliInterface, class {
         let parsed = null;
         try {
             if (!/^https?:$/i.test(location.protocol)) return;
-            parsed = this.parseZaliLink(`${location.origin}${location.pathname}`);
+            // Клиент может лежать в подкаталоге (msg.zalikus.org/web/server/<код>):
+            // корень — это <base>, который index.html ставит на такой странице.
+            const base = new URL(document.baseURI).pathname;
+            const rel = location.pathname.startsWith(base) ? location.pathname.slice(base.length) : location.pathname.replace(/^\/+/, '');
+            parsed = this.parseZaliLink(`${location.origin}/${rel}`);
             if (!parsed) return;
             sessionStorage.setItem(ZALI_PENDING_LINK_KEY, JSON.stringify(parsed));
-            history.replaceState(null, '', `/${location.search || ''}`);
+            history.replaceState(null, '', `${base}${location.search || ''}`);
         } catch (e) { /* без sessionStorage/history ссылка просто не откроется сама */ }
     }
 

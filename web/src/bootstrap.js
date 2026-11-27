@@ -128,7 +128,9 @@
     // origin, where SW registration would be meaningless at best. See web/service-worker.js.
     if (!window.__ZALI_NATIVE?.available && 'serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+            // Абсолютный путь: скрипт всегда лежит в корне хоста. Там, где клиент в
+            // подкаталоге (msg.zalikus.org/web/), это копия с APP_ROOT = '/web/'.
+            navigator.serviceWorker.register('/service-worker.js').catch(() => {});
         });
     }
 

@@ -68,7 +68,8 @@ query/explain/path` перед каждым Read/Grep по исходникам 
 > **Статус на 2026-11-27: прод доступен, сервер и клиенты (macOS/Windows/Android) — `0.2b85`.**
 > Windows-сборка — кросс-сборка с Mac, на живой Windows не прогонялась.
 
-- API: `https://msgs.zalikus.org`; standalone веб-клиент: `https://msg.zalikus.org`.
+- API: `https://msgs.zalikus.org`; сайт: `https://msg.zalikus.org`; standalone веб-клиент: `https://msg.zalikus.org/web/`
+  (ссылки `msg.zalikus.org/server/<код>` и `/profile/<имя>` nginx перенаправляет в `/web/…`).
 - Серверный репозиторий: https://github.com/zalikuska/zali-messenger-server (ветка `zali-server`).
 - Хост, SSH, systemd, соседние сервисы, coturn, деплой — в `CLAUDE.local.md`, `ops/` и
   приватных скиллах `zali-ops-*` (всё в `.gitignore`). Репозитории публичные — **не возвращать эти
@@ -98,6 +99,10 @@ python3 scripts/bundle_web.py
 
 # Standalone browser/PWA — запускать перед bundle_web.py, чтобы web/wasm-pkg/ уже был на месте
 scripts/build_web_wasm.sh
+
+# Дерево msg.zalikus.org: сайт (site/) на корне, веб-клиент в /web/, сервис-воркер в корне → dist/site/
+# (после build_web_wasm.sh и bundle_web.py; --web-root — собрать из другого чекаута, например чистого worktree)
+python3 scripts/build_site_dist.py
 
 # macOS (Swift, основной клиент) — core собирается первым
 cd core && cargo build --release && cd ..

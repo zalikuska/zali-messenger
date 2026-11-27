@@ -2,24 +2,39 @@
 // directory's own static files (HTML/CSS/JS/wasm) so the app shell loads offline;
 // everything under /api and /ws always goes straight to the network — this is a
 // live messenger, not a static site, and stale cached API responses would be wrong.
-const CACHE_NAME = 'zali-shell-v3';
+const CACHE_NAME = 'zali-shell-v4';
+// Корень веб-клиента. './' — рядом со скриптом (локальный сервер, отдельный хост на
+// корне). На msg.zalikus.org клиент лежит в /web/, а сам скрипт — в корне домена: так
+// сохраняется прежняя регистрация со scope «/» и вместе с ней подписки Web Push у тех,
+// кто ставил PWA, когда клиент жил на корне. Сборка дистрибутива сайта
+// (scripts/build_site_dist.py) кладёт копию скрипта в /service-worker.js с
+// APP_ROOT = '/web/'; маркер ниже — то, что она подменяет.
+const APP_ROOT = './'; // @app-root
+const APP_BASE = new URL(APP_ROOT, self.location.href);
+const appUrl = (path) => new URL(path, APP_BASE).href;
+// Окна самого приложения: у домена есть и другие страницы (сайт на корне), их клик по
+// уведомлению не должен ни фокусировать, ни получать сообщения.
+async function appWindows() {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    return all.filter((client) => client.url.startsWith(APP_BASE.href));
+}
 // Настройки, которые страница сообщает SW (адрес API для «Отклонить» в уведомлении о
 // звонке). Отдельный кеш, переживающий смену версии каркаса.
 const CONFIG_CACHE = 'zali-sw-config';
 const CONFIG_KEY = './__zali-sw-config';
 const SHELL_FILES = [
-    './',
-    './index.html',
-    './style.css',
-    './app.js',
-    './manifest.json',
-    './icon.svg',
-    './icon-192.png',
-    './icon-512.png',
-    './apple-touch-icon.png',
-    './wasm-pkg/zali_core.js',
-    './wasm-pkg/zali_core_bg.wasm',
-];
+    '',
+    'index.html',
+    'style.css',
+    'app.js',
+    'manifest.json',
+    'icon.svg',
+    'icon-192.png',
+    'icon-512.png',
+    'apple-touch-icon.png',
+    'wasm-pkg/zali_core.js',
+    'wasm-pkg/zali_core_bg.wasm',
+].map(appUrl);
 
 self.addEventListener('install', (event) => {
     event.waitUntil(
@@ -88,8 +103,8 @@ function showCallNotification(data) {
     if (payload.kind === 'call') {
         return self.registration.showNotification(data.title || 'Входящий звонок', {
             body: data.body || payload.from || '',
-            icon: './icon-192.png',
-            badge: './icon-192.png',
+            icon: appUrl('icon-192.png'),
+            badge: appUrl('icon-192.png'),
             tag,
             renotify: true,
             requireInteraction: true,
@@ -105,8 +120,8 @@ function showCallNotification(data) {
     // ничего не показать нельзя.
     return self.registration.showNotification(data.title || 'Звонок завершён', {
         body: data.body || payload.from || '',
-        icon: './icon-192.png',
-        badge: './icon-192.png',
+        icon: appUrl('icon-192.png'),
+        badge: appUrl('icon-192.png'),
         tag,
         silent: !!data.silent,
         data: payload,
@@ -126,8 +141,8 @@ self.addEventListener('push', (event) => {
     const title = data.title || 'ZaliMessenger';
     const options = {
         body: data.body || '',
-        icon: './icon-192.png',
-        badge: './icon-192.png',
+        icon: appUrl('icon-192.png'),
+        badge: appUrl('icon-192.png'),
         data: data.data || {},
     };
     if (data.tag) {
@@ -161,7 +176,7 @@ async function declineCall(data) {
             if (response.ok || response.status === 410) return;
         } catch (e) {}
     }
-    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const clientList = await appWindows();
     for (const client of clientList) {
         client.postMessage({ type: 'zali:call-action', action: 'decline', roomId: data.roomId || '', from: data.from || '' });
     }
@@ -169,7 +184,7 @@ async function declineCall(data) {
 
 async function openForCall(data, action) {
     const message = { type: 'zali:call-action', action, roomId: data.roomId || '', from: data.from || '' };
-    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const clientList = await appWindows();
     for (const client of clientList) {
         if ('focus' in client) {
             client.postMessage(message);
@@ -177,7 +192,7 @@ async function openForCall(data, action) {
         }
     }
     if (!self.clients.openWindow) return undefined;
-    const url = new URL(self.registration.scope);
+    const url = new URL(APP_BASE.href);
     // «Принять» через адрес — только с одноразовым nonce, который знает лишь этот
     // service worker (Cache API того же origin). Без него страница считает `?call=`
     // простым «открыть»: иначе ссылка `?call={"action":"accept"}` от звонящего
@@ -214,7 +229,7 @@ self.addEventListener('notificationclick', (event) => {
     };
     const hasTarget = !!(target.sender || (target.serverId && target.channelId));
     event.waitUntil(
-        self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+        appWindows().then((clientList) => {
             for (const client of clientList) {
                 if ('focus' in client) {
                     if (hasTarget) client.postMessage({ type: 'zali:open-conversation', ...target });
@@ -222,7 +237,7 @@ self.addEventListener('notificationclick', (event) => {
                 }
             }
             if (!self.clients.openWindow) return undefined;
-            const url = new URL(self.registration.scope);
+            const url = new URL(APP_BASE.href);
             if (hasTarget) url.searchParams.set('open', JSON.stringify(target));
             return self.clients.openWindow(url.toString());
         })
@@ -232,6 +247,8 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
     if (url.origin !== self.location.origin) return;
+    // Скрипт может стоять в корне домена (scope «/»), а приложение — в подкаталоге.
+    if (!url.pathname.startsWith(APP_BASE.pathname)) return;
     if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/uploads')) return;
     if (event.request.method !== 'GET') return;
 

@@ -112,6 +112,18 @@
         "mkdir -p /tmp/zali-sfu-rig && BIND_ADDR=127.0.0.1:3001 ZALI_DATA_DIR=/tmp/zali-sfu-rig SFU_UDP_PORT=3480 SFU_PUBLIC_IP=127.0.0.1 JWT_SECRET=local-dev-sfu-rig-secret-not-for-production-01 ALLOWED_ORIGINS=http://127.0.0.1:8090,http://localhost:8090 ALLOW_GUEST_MODE=false AUTH_COOKIE_SECURE=false SFU_TEST_STALL=70/520/256 SFU_TEST_STALL_VIEWERS=1 RUST_LOG=zali_server::sfu=debug,zali_server=info exec server/target/release/zali_server"
       ],
       "port": 3001
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8096",
+        "--directory",
+        "site"
+      ],
+      "port": 8096
     }
   ]
 }
