@@ -846,6 +846,22 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .await
     .expect("Ошибка создания таблицы contacts");
 
+    // «Удалён из контактов». Список контактов — явные записи плюс все, с кем есть
+    // личная переписка; удаление стирало только явную запись, и человек с историей
+    // тут же возвращался. Метка скрывает его, пока в переписке не появится
+    // сообщение новее метки (см. contacts.rs).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS contacts_hidden (
+            owner TEXT NOT NULL,
+            contact TEXT NOT NULL,
+            hidden_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner, contact)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы contacts_hidden");
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS avatars (
             username TEXT PRIMARY KEY,

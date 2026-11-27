@@ -253,6 +253,16 @@ ZaliMixin(ZaliInterface, class {
         // the callee holding callSetupInFlight forever: the accept was never sent, and
         // «Принять» silently did nothing on every later call too.
         void this.unlockVoicePlayback();
+        // Захват микрофона запускается ЗДЕСЬ, синхронно, пока мы ещё в обработчике тапа
+        // по «Принять»: Safari (и каждый iOS-браузер, включая PWA с главного экрана)
+        // отклоняет запрос разрешения, не привязанный к жесту. Ниже есть await
+        // (переподключение сокета после возврата из фона — на iPhone это обычное дело),
+        // и getUserMedia, вызванный уже после него, молча не получал микрофон: звонок
+        // соединялся, а принявший не отправлял ни одного пакета (баг-репорт sabits
+        // 2026-11-27: rx=STALLED inPackets=0 во всех трёх звонках). Промис общий
+        // (ensureVoiceLocalStream дедуплицирует), ниже он только дожидается.
+        const micStart = this.ensureVoiceLocalStream();
+        micStart.catch(() => { /* обработано в try ниже */ });
         this.voice.roomId = String(invite.roomId || '').trim();
         this.voice.roomType = 'dm';
         this.voice.targetUser = String(invite.from || '').trim();
@@ -291,7 +301,7 @@ ZaliMixin(ZaliInterface, class {
         });
         this.renderVoicePanel();
         try {
-            await this.ensureVoiceLocalStream();
+            await micStart;
             await this.syncVoicePeers();
         } catch (error) {
             this.addLogEntry({

@@ -24,6 +24,7 @@
     "modules/native_types.js",
     "modules/ui_select.js",
     "modules/focus_modality.js",
+    "modules/sheet_dialogs.js",
     "modules/row_reorder.js",
     "modules/auth.js",
     "modules/contacts.js",

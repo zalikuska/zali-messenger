@@ -71,6 +71,41 @@ ZaliMixin(ZaliInterface, class {
         return /Mobi|Android|iPhone/.test(ua) ? 'browser-mobile' : 'browser';
     }
 
+    // Размеры области экрана — для багов вёрстки на телефоне (поле ввода/док выше
+    // края экрана, шапка под статус-баром в iOS-PWA): без этих чисел по скриншоту
+    // не отличить сжатый вьюпорт от ошибки CSS.
+    collectViewportDiagnostics() {
+        try {
+            const vv = window.visualViewport;
+            const root = document.documentElement;
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;'
+                + 'padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)';
+            document.body.appendChild(probe);
+            const cs = getComputedStyle(probe);
+            const env = [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft];
+            probe.remove();
+            const app = document.querySelector('.app')?.getBoundingClientRect();
+            const dock = document.querySelector('.mobile-dock')?.getBoundingClientRect();
+            return {
+                inner: [window.innerWidth, window.innerHeight],
+                client: [root.clientWidth, root.clientHeight],
+                screen: [screen.width, screen.height],
+                vv: vv ? [Math.round(vv.width), Math.round(vv.height), Math.round(vv.offsetTop), Number((vv.scale || 1).toFixed(2))] : null,
+                scroll: [Math.round(window.scrollX), Math.round(window.scrollY)],
+                safeEnv: env,
+                standalone: !!(window.navigator?.standalone || window.matchMedia?.('(display-mode: standalone)')?.matches),
+                appH: root.style.getPropertyValue('--app-h') || '',
+                kbdInset: document.body?.style.getPropertyValue('--kbd-inset') || '',
+                kbdOpen: !!document.body?.classList.contains('kbd-open'),
+                appRect: app ? [Math.round(app.top), Math.round(app.height)] : null,
+                dockRect: dock ? [Math.round(dock.top), Math.round(dock.bottom)] : null,
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
     collectDiagnosticsSnapshot(kind, extra = {}) {
         const scrubLines = (ring, tail) => (Array.isArray(ring) ? ring.slice(-tail) : [])
             .map(line => this.scrubDiagnosticText(line));
@@ -117,6 +152,7 @@ ZaliMixin(ZaliInterface, class {
                 })),
             },
             memory,
+            viewport: this.collectViewportDiagnostics(),
             failedRequests: scrubLines(this._requestFailureRing, 60),
             journal: scrubLines(this._journalRing, 200),
             // Строки трассы начинаются с performance.now() в мс (дёшево на горячем

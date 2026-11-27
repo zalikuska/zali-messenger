@@ -369,8 +369,24 @@ pub(crate) async fn get_contacts(
          FROM messages
          WHERE server_id IS NULL
            AND (sender = ? OR receiver = ?)
-           AND CASE WHEN sender = ? THEN receiver ELSE sender END <> ?",
+           AND CASE WHEN sender = ? THEN receiver ELSE sender END <> ?
+           AND (
+               NOT EXISTS (
+                   SELECT 1 FROM contacts_hidden h
+                   WHERE h.owner = ?
+                     AND h.contact = CASE WHEN messages.sender = ? THEN messages.receiver ELSE messages.sender END
+               )
+               OR datetime(messages.timestamp) > (
+                   SELECT datetime(h.hidden_at) FROM contacts_hidden h
+                   WHERE h.owner = ?
+                     AND h.contact = CASE WHEN messages.sender = ? THEN messages.receiver ELSE messages.sender END
+               )
+           )",
     )
+    .bind(&owner)
+    .bind(&owner)
+    .bind(&owner)
+    .bind(&owner)
     .bind(&owner)
     .bind(&owner)
     .bind(&owner)
@@ -449,6 +465,13 @@ pub(crate) async fn add_contact(
         error!("Ошибка добавления контакта {} -> {}: {}", owner, contact, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    // Явное добавление отменяет прежнее удаление.
+    sqlx::query("DELETE FROM contacts_hidden WHERE owner = ? AND contact = ?")
+        .bind(&owner)
+        .bind(contact)
+        .execute(&state.db)
+        .await
+        .ok();
     info!("API add_contact saved owner={} contact={}", owner, contact);
 
     get_contacts(axum::extract::State(state), AuthenticatedUser(owner))
@@ -472,6 +495,19 @@ pub(crate) async fn delete_contact(
         .await
     {
         error!("Ошибка удаления контакта {} -> {}: {}", owner, username, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    // Контакт, известный только по переписке, иначе вернулся бы в список тут же.
+    if let Err(e) = sqlx::query(
+        "INSERT INTO contacts_hidden (owner, contact, hidden_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(owner, contact) DO UPDATE SET hidden_at = CURRENT_TIMESTAMP",
+    )
+    .bind(&owner)
+    .bind(&username)
+    .execute(&state.db)
+    .await
+    {
+        error!("Ошибка скрытия контакта {} -> {}: {}", owner, username, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     info!(

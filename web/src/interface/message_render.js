@@ -1115,6 +1115,26 @@ ZaliMixin(ZaliInterface, class {
                 if (updated) break;
             }
         }
+        // Эхо сервера могло прийти раньше подтверждения отправки и без метки clientId (старая
+        // оболочка Android её не передавала): тогда оно легло отдельным сообщением с тем же id,
+        // а после подтверждения в ленте стало два одинаковых. Оставляем запись со статусом.
+        if (updated && serverId) {
+            const dropTwin = (msgs, keep) => {
+                let removed = false;
+                for (let j = msgs.length - 1; j >= 0; j--) {
+                    if (msgs[j] !== keep && String(msgs[j].id || '').trim() === serverId) {
+                        msgs.splice(j, 1);
+                        removed = true;
+                    }
+                }
+                return removed;
+            };
+            const stores = [...Object.values(this.S.chats || {}), ...Object.values(this.S.serverChats || {})];
+            for (const msgs of stores) {
+                const keep = msgs.find(m => String(m.clientId || '').trim() === pendingId);
+                if (keep && dropTwin(msgs, keep)) changed = true;
+            }
+        }
         this._finalizeChanged = updated && changed;
         if (updated && changed && render) {
             this.scheduleRenderMessages();

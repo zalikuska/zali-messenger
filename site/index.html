@@ -307,9 +307,9 @@ h3 { margin: 0 0 6px; font-size: 19px; font-weight: 700; letter-spacing: -.01em;
 .cur span { margin-top: 13px; height: 19px; padding: 0 7px; border-radius: 6px 9px 9px 9px; font-size: 10.5px; font-weight: 700; color: #fff; display: flex; align-items: center; white-space: nowrap; }
 .tag { position: absolute; left: 12px; bottom: 11px; height: 26px; padding: 0 10px; border-radius: 9px; background: var(--f-fill-strong); font-size: 11.5px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
 .tag svg { width: 13px; height: 13px; }
-.people { display: grid; grid-template-rows: minmax(0, 1fr); gap: 10px; }
-.ptile { position: relative; border-radius: 14px; background: var(--f-fill); display: grid; place-items: center; }
-.ptile .ava { width: 44px; height: 44px; font-size: 15px; }
+.people { display: grid; grid-template-rows: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.ptile { position: relative; border-radius: 14px; background: var(--f-fill); display: grid; place-items: start center; padding-top: 12px; }
+.ptile .ava { width: 38px; height: 38px; font-size: 14px; }
 .ptile .ava.speak { box-shadow: 0 0 0 3px rgb(var(--surface-rgb)), 0 0 0 5px var(--accent); }
 .ptile label { position: absolute; left: 8px; bottom: 7px; font-size: 11px; font-weight: 700; }
 .ptile .muted { position: absolute; right: 7px; top: 7px; width: 22px; height: 22px; border-radius: 50%; background: var(--f-fill-strong); color: var(--danger); display: grid; place-items: center; }
@@ -469,8 +469,8 @@ footer { padding: 40px 0 44px; }
 .fc-title small { font-weight: 600; opacity: var(--meta); font-variant-numeric: tabular-nums; }
 .live { display: inline-flex; align-items: center; gap: 6px; }
 .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: caret 1.6s infinite; }
-.call-avas { display: flex; gap: 10px; margin: 12px 0; justify-content: center; }
-.call-avas .ava { width: 42px; height: 42px; font-size: 15px; }
+.call-avas { display: flex; gap: 8px; margin: 12px 0; justify-content: center; }
+.call-avas .ava { width: 38px; height: 38px; font-size: 14px; }
 .call-ctl { display: flex; gap: 8px; justify-content: center; }
 .call-ctl span { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--f-fill); }
 .call-ctl span.on { background: var(--accent); color: var(--on-accent); }
@@ -496,9 +496,14 @@ footer { padding: 40px 0 44px; }
 .cur { animation-timing-function: cubic-bezier(.45,0,.2,1); animation-iteration-count: infinite; }
 .show.in-view .cur.c1 { animation-name: cur1; animation-duration: 7s; }
 .show.in-view .cur.c2 { animation-name: cur2; animation-duration: 8.5s; }
+.show.in-view .cur.c3 { animation-name: cur3; animation-duration: 9.5s; }
+.show.in-view .cur.c4 { animation-name: cur4; animation-duration: 6.5s; }
 @keyframes cur1 { 0%, 100% { left: 22%; top: 46%; } 30% { left: 46%; top: 44%; } 60% { left: 66%; top: 52%; } 82% { left: 30%; top: 62%; } }
 @keyframes cur2 { 0%, 100% { left: 58%; top: 58%; } 28% { left: 28%; top: 60%; } 58% { left: 16%; top: 36%; } 84% { left: 62%; top: 38%; } }
-.wave { display: flex; gap: 3px; align-items: center; height: 16px; position: absolute; right: 9px; top: 9px; }
+@keyframes cur3 { 0%, 100% { left: 70%; top: 30%; } 24% { left: 52%; top: 56%; } 52% { left: 38%; top: 40%; } 80% { left: 12%; top: 54%; } }
+@keyframes cur4 { 0%, 100% { left: 14%; top: 24%; } 32% { left: 34%; top: 34%; } 60% { left: 56%; top: 62%; } 86% { left: 68%; top: 48%; } }
+.wave { display: flex; gap: 3px; align-items: center; height: 16px; position: absolute; right: 9px; top: 9px; opacity: 0; transition: opacity .25s var(--ease-out); }
+.ptile:has(.speak) .wave { opacity: 1; }
 .wave i { width: 3px; border-radius: 2px; background: var(--accent); animation: wv 1s ease-in-out infinite; }
 .wave i:nth-child(1) { animation-delay: -.2s; } .wave i:nth-child(2) { animation-delay: -.5s; } .wave i:nth-child(3) { animation-delay: -.1s; } .wave i:nth-child(4) { animation-delay: -.7s; }
 @keyframes wv { 0%, 100% { height: 4px; } 50% { height: 16px; } }
@@ -546,7 +551,7 @@ footer { padding: 40px 0 44px; }
   .f-game { display: none; }
   .f-call { right: -4px; top: 0; width: 196px; padding: 10px; }
   .f-call .fc-title { font-size: 11px; white-space: nowrap; gap: 6px; }
-  .f-call .call-avas .ava { width: 34px; height: 34px; font-size: 13px; }
+  .f-call .call-avas .ava { width: 30px; height: 30px; font-size: 12px; }
   .f-call .call-ctl span { width: 34px; height: 34px; }
   .win-body { grid-template-columns: minmax(0, 1fr); }
   .app-win .rail, .app-win .side { display: none; }
@@ -567,7 +572,9 @@ footer { padding: 40px 0 44px; }
   .pv-srv .rail .sv { width: 34px; height: 34px; }
   .chs { display: none; }
   .call-stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: 210px 84px; height: auto; }
-  .people { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; }
+  .people { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 6px; }
+  .ptile label { left: 0; right: 0; bottom: 6px; text-align: center; font-size: 10.5px; }
+  .wave { display: none; }
   .ptile .ava { width: 36px; height: 36px; font-size: 13px; }
   .tag { display: none; }
   .call-bar .info { display: none; }
@@ -705,7 +712,7 @@ footer { padding: 40px 0 44px; }
       </div>
       <div class="float f-call">
         <div class="fc-title"><span class="live">Голосовой · Команда</span><small id="callTimer">12:48</small></div>
-        <div class="call-avas"><div class="ava speakable" style="background:#3a8df0">М</div></div>
+        <div class="call-avas"><div class="ava speakable" style="background:#3a8df0">М</div><div class="ava speakable" style="background:#e8763a">А</div><div class="ava speakable" style="background:#c24fd0">И</div><div class="ava speakable" style="background:#11a37f">Д</div></div>
         <div class="call-ctl"><span><svg><use href="#i-mic"/></svg></span><span class="on"><svg><use href="#i-screen"/></svg></span><span class="end"><svg><use href="#i-end"/></svg></span></div>
       </div>
       <div class="float f-game"><div class="ava" style="background:#3a8df0">И</div>Игорь <em>играет в Factorio</em><svg><use href="#i-pad"/></svg></div>
@@ -785,12 +792,17 @@ footer { padding: 40px 0 44px; }
             <div class="cat">Голосовые</div>
             <div class="ch"><svg><use href="#i-vol"/></svg>Планёрка</div>
             <div class="vu"><i class="speakable" style="background:#3a8df0"></i>Максим<svg><use href="#i-screen"/></svg></div>
+            <div class="vu"><i class="speakable" style="background:#e8763a"></i>Алиса</div>
+            <div class="vu"><i class="speakable" style="background:#c24fd0"></i>Игорь</div>
+            <div class="vu"><i class="speakable" style="background:#11a37f"></i>Даниил</div>
           </div>
           <div class="srv-feed">
-            <div class="panel-head"><svg><use href="#i-hash"/></svg><b>общий</b><small>· 1 участник</small></div>
+            <div class="panel-head"><svg><use href="#i-hash"/></svg><b>общий</b><small>· 4 участника</small></div>
             <div class="posts">
               <div class="post"><div class="ava" style="background:#3a8df0">М</div><div><div class="who">Максим <span class="role">Админ</span><small>19:20</small></div><p>Билд 0.4 залит, можно тестировать</p></div></div>
               <div class="post"><div class="ava" style="background:#3a8df0">М</div><div><div class="who">Максим <small>19:22</small></div><p>Я в «Планёрке», показываю экран — подключайтесь</p></div></div>
+              <div class="post"><div class="ava" style="background:#e8763a">А</div><div><div class="who">Алиса <small>19:23</small></div><p>Уже тут, вижу экран</p></div></div>
+              <div class="post"><div class="ava" style="background:#c24fd0">И</div><div><div class="who">Игорь <small>19:24</small></div><p>Подключаюсь, дайте минуту</p></div></div>
               <div class="post"><div class="ava" style="background:#3a8df0">М</div><div><div class="who">Максим <small>19:25</small></div><p>Позову Мишу:</p>
                 <div class="invite"><div class="sv" style="background:#6d5dfc">К</div><div><b>Команда</b><small>Приглашение на сервер</small></div><span class="go">Вступить</span></div>
               </div></div>
@@ -819,10 +831,16 @@ footer { padding: 40px 0 44px; }
                 <div class="desk-page"><div class="hb"><u style="width:30%"></u><u style="width:16%;margin-left:auto"></u></div><div class="tk"><b style="background:#6d5dfc"></b><u></u><u></u></div><div class="tk sel"><b style="background:#e8763a"></b><u></u><u></u></div><div class="tk"><b style="background:#11a37f"></b><u></u><u></u></div><div class="hb ft"><u style="width:22%"></u><u style="width:12%"></u><u style="width:12%;margin-left:auto"></u></div></div>
               </div>
               <div class="cur c1" style="left:22%;top:46%;color:#3a8df0"><svg><use href="#i-cursor"/></svg><span style="background:#3a8df0">Максим</span></div>
+              <div class="cur c2" style="left:58%;top:58%;color:#e8763a"><svg><use href="#i-cursor"/></svg><span style="background:#e8763a">Алиса</span></div>
+              <div class="cur c3" style="left:70%;top:30%;color:#c24fd0"><svg><use href="#i-cursor"/></svg><span style="background:#c24fd0">Игорь</span></div>
+              <div class="cur c4" style="left:14%;top:24%;color:#11a37f"><svg><use href="#i-cursor"/></svg><span style="background:#11a37f">Даниил</span></div>
               <div class="tag"><svg><use href="#i-globe"/></svg>Запустил Максим</div>
             </div>
             <div class="people">
               <div class="ptile"><div class="ava speakable" style="background:#3a8df0">М</div><label>Максим</label><div class="wave"><i></i><i></i><i></i><i></i></div></div>
+              <div class="ptile"><div class="ava speakable" style="background:#e8763a">А</div><label>Алиса</label><div class="wave"><i></i><i></i><i></i><i></i></div></div>
+              <div class="ptile"><div class="ava speakable" style="background:#c24fd0">И</div><label>Игорь</label><div class="wave"><i></i><i></i><i></i><i></i></div></div>
+              <div class="ptile"><div class="ava speakable" style="background:#11a37f">Д</div><label>Даниил</label><div class="wave"><i></i><i></i><i></i><i></i></div></div>
             </div>
           </div>
           <div class="call-bar">

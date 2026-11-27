@@ -397,7 +397,7 @@ ZaliMixin(ZaliInterface, class {
             if (slots.length < 2) return;
             const activeEl = dock.querySelector('.mobile-dock-btn.active');
             const startTx = (slots.find((slot) => slot.el === activeEl) || slots[0]).left;
-            drag = { id: e.pointerId, startX: e.clientX, startTx, moved: false, slots, x: startTx };
+            drag = { id: e.pointerId, startX: e.clientX, startTx, moved: false, slots, x: startTx, pressed };
             dock.__dockDrag = drag;
             // Снимок старого экрана для въезда по касанию — пока палец лежит (mobile_pager.js).
             if (pressed !== activeEl) this.mobilePagerPrepareTap?.(this.mobileDockSectionOf(pressed));
@@ -432,13 +432,24 @@ ZaliMixin(ZaliInterface, class {
 
         const finishDrag = (e, cancelled) => {
             if (!drag || e.pointerId !== drag.id) return;
-            const { moved, slots, x } = drag;
+            const { moved, slots, x, pressed } = drag;
             drag = null;
             dock.__dockDrag = null;
             if (!moved) {
                 // Касание: click придёт следом и заберёт снимок; если нет — он уберётся сам.
                 if (cancelled) this.mobilePagerDropPrepared?.();
                 else this.mobilePagerReleasePrepared?.();
+                // iOS 26: у дока touch-action:none, и нативный click после касания не
+                // приходит — раздел переключался только «перекатом» капсулы (репорт
+                // 2026-11-27). Нажатие засчитываем сами по pointerup; пришедший следом
+                // настоящий click гасится флагом ниже — сперва клик, потом флаг, иначе
+                // перехватчик проглотил бы и наш.
+                if (!cancelled && pressed && pressed.isConnected) {
+                    dock.__suppressDockClick = false;
+                    pressed.click();
+                    dock.__suppressDockClick = true;
+                    setTimeout(() => { dock.__suppressDockClick = false; }, 350);
+                }
                 return;
             }
             dock.classList.remove('is-dragging');
@@ -847,6 +858,7 @@ ZaliMixin(ZaliInterface, class {
         let raf = 0;
         let lastInset = '';
         let lastAppH = '';
+        let idleGap = 0;
 
         const isTextEntry = (el) => {
             if (!el || el === document.body) return false;
@@ -865,7 +877,7 @@ ZaliMixin(ZaliInterface, class {
             const layoutH = window.innerHeight || root.clientHeight || 0;
             const visibleH = vv ? vv.height : layoutH;
             const mobile = this.isMobileLayout();
-            const inset = mobile && vv
+            const rawInset = mobile && vv
                 ? Math.max(0, Math.round(layoutH - vv.height - vv.offsetTop))
                 : 0;
 
@@ -875,10 +887,20 @@ ZaliMixin(ZaliInterface, class {
             if (width !== baselineWidth) {
                 baselineWidth = width;
                 baselineHeight = 0;
+                idleGap = 0;
             }
             if (visibleH > baselineHeight) baselineHeight = visibleH;
             const covered = baselineHeight - visibleH;
             const open = mobile && covered > KEYBOARD_MIN && isTextEntry(document.activeElement);
+            // Разница layout/visual viewport БЕЗ клавиатуры — не клавиатура. На iOS в
+            // PWA с главного экрана `visualViewport.height` бывает короче `innerHeight`
+            // на ~60 pt постоянно (баг-репорты 2026-11-27: поле ввода обрезано на этой
+            // высоте, под ним и под доком полоса цвета темы). Раньше любая такая
+            // разница считалась клавиатурой: `.app` ужимался до 791 pt навсегда, а
+            // `--kbd-inset` поднимал список. Теперь вставка считается, только когда
+            // клавиатура действительно открыта, и за вычетом этого «холостого» зазора.
+            if (!open) idleGap = rawInset;
+            const inset = open ? Math.max(0, rawInset - idleGap) : 0;
 
             const insetValue = `${inset}px`;
             if (insetValue !== lastInset) {
@@ -893,7 +915,10 @@ ZaliMixin(ZaliInterface, class {
             }
             // iOS успевает сдвинуть страницу к полю до того, как приложение
             // сжалось: возвращаем её на место, иначе шапка остаётся за краем.
-            if (inset > 0 && vv && vv.offsetTop > 0) {
+            // И без клавиатуры тоже: html/body — overflow:hidden, но iOS всё равно
+            // оставляет документ прокрученным после фокуса, и полоса звонка с шапкой
+            // уезжают под статус-бар (репорты 2026-11-27).
+            if (mobile && vv && (vv.offsetTop > 0 || window.scrollY > 0)) {
                 try { window.scrollTo(0, 0); } catch (e) { /* не критично */ }
             }
 

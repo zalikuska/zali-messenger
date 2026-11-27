@@ -2336,6 +2336,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 if (id.isNotEmpty() && sender != null && receiver != null) {
                     val serverId = (raw.optStringOrNull("serverId") ?: raw.optStringOrNull("server_id"))
                     val channelId = (raw.optStringOrNull("channelId") ?: raw.optStringOrNull("channel_id"))
+                    // Метка отправки: по ней веб склеивает своё сообщение с эхом сервера. Без неё
+                    // эхо, пришедшее раньше ответа на загрузку (архив теперь едет в самом кадре и
+                    // расшифровывается за миллисекунды), ложилось вторым пузырём.
+                    val clientId = (raw.optStringOrNull("client_id") ?: raw.optStringOrNull("clientId"))
                     // Маленький архив сервер кладёт прямо в кадр (server/src/messages.rs,
                     // `inlineArchive`) — тогда отдельного GET /api/download/:id не нужно.
                     // Это круг до сервера на каждое входящее сообщение, а на мобильной
@@ -2347,9 +2351,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     if (inlineBytes != null && inlineBytes.isNotEmpty()) {
                         // Тот же исполнитель, что и у скачанного архива: unpackMessage —
                         // это PBKDF2 210k + AES-GCM, на UI-потоке он вешает приложение.
-                        cryptoExecutor.execute { decryptAndDeliver(inlineBytes, id, sender, receiver, serverId, channelId) }
+                        cryptoExecutor.execute { decryptAndDeliver(inlineBytes, id, sender, receiver, serverId, channelId, clientId) }
                     } else {
-                        downloadAndDecryptMessage(id, sender, receiver, serverId, channelId)
+                        downloadAndDecryptMessage(id, sender, receiver, serverId, channelId, clientId)
                     }
                 }
             }
@@ -2982,7 +2986,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     /** Downloads the `.zali` archive for a WS-pushed message envelope. Server-side
      * authorization (the download endpoint only serves archives the caller is
      * entitled to) is the relevance filter — no client-side pre-check. */
-    private fun downloadAndDecryptMessage(id: String, sender: String, receiver: String, serverId: String?, channelId: String?) {
+    private fun downloadAndDecryptMessage(id: String, sender: String, receiver: String, serverId: String?, channelId: String?, clientId: String? = null) {
         if (!ZaliCoreBridge.isAvailable) return
         val encodedId = java.net.URLEncoder.encode(id, "UTF-8")
         val request = Request.Builder().url("$apiBaseUrl/api/download/$encodedId").apply {
@@ -2997,7 +3001,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     // NOT mainHandler: unpackMessage is PBKDF2 210k + AES-GCM, and
                     // running it on the UI thread janked (and on slow devices ANR'd)
                     // the app on every single incoming message.
-                    cryptoExecutor.execute { decryptAndDeliver(bytes, id, sender, receiver, serverId, channelId) }
+                    cryptoExecutor.execute { decryptAndDeliver(bytes, id, sender, receiver, serverId, channelId, clientId) }
                 }
             }
         })
@@ -3006,7 +3010,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     /** Unpacks + decrypts a downloaded `.zali` archive via [ZaliCoreBridge] and calls
      * `window.receiveMessage(...)` with the plaintext. A message encrypted under a
      * key this device hasn't synced yet is silently dropped, matching macOS. */
-    private fun decryptAndDeliver(archiveBytes: ByteArray, id: String, sender: String, receiver: String, serverId: String?, channelId: String?) {
+    private fun decryptAndDeliver(archiveBytes: ByteArray, id: String, sender: String, receiver: String, serverId: String?, channelId: String?, clientId: String? = null) {
         val workDirName = UUID.randomUUID().toString()
         val archiveFile = File(context.cacheDir, "$workDirName.zali")
         val tempDir = File(context.cacheDir, "$workDirName-unpack")
@@ -3053,6 +3057,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 // текущий момент — как и на macOS/Windows, которые тоже его не шлют.
                 if (serverId != null) put("serverId", serverId)
                 if (channelId != null) put("channelId", channelId)
+                if (!clientId.isNullOrEmpty()) put("clientId", clientId)
             }
             // evaluateJavascript must be called on the main thread — this method now
             // runs on cryptoExecutor.
