@@ -307,7 +307,7 @@ h3 { margin: 0 0 6px; font-size: 19px; font-weight: 700; letter-spacing: -.01em;
 .cur span { margin-top: 13px; height: 19px; padding: 0 7px; border-radius: 6px 9px 9px 9px; font-size: 10.5px; font-weight: 700; color: #fff; display: flex; align-items: center; white-space: nowrap; }
 .tag { position: absolute; left: 12px; bottom: 11px; height: 26px; padding: 0 10px; border-radius: 9px; background: var(--f-fill-strong); font-size: 11.5px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
 .tag svg { width: 13px; height: 13px; }
-.people { display: grid; grid-template-rows: repeat(3, 1fr); gap: 10px; }
+.people { display: grid; grid-template-rows: minmax(0, 1fr); gap: 10px; }
 .ptile { position: relative; border-radius: 14px; background: var(--f-fill); display: grid; place-items: center; }
 .ptile .ava { width: 44px; height: 44px; font-size: 15px; }
 .ptile .ava.speak { box-shadow: 0 0 0 3px rgb(var(--surface-rgb)), 0 0 0 5px var(--accent); }
@@ -559,7 +559,7 @@ footer { padding: 40px 0 44px; }
   .pv-srv .rail .sv { width: 34px; height: 34px; }
   .chs { display: none; }
   .call-stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: 210px 84px; height: auto; }
-  .people { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; }
+  .people { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; }
   .ptile .ava { width: 36px; height: 36px; font-size: 13px; }
   .tag { display: none; }
   .call-bar .info { display: none; }
@@ -673,7 +673,7 @@ footer { padding: 40px 0 44px; }
             <div class="search"><svg><use href="#i-search"/></svg><span>Поиск</span></div>
             <div class="ct active"><div class="ava" style="background:#d9548a">А</div><div><b>Андрей</b><small id="sidePreview">Вы: Договорились</small></div></div>
             <div class="ct"><div class="ava" style="background:#3a8df0">И</div><div><b>Игорь</b><small class="play">Играет в Factorio</small></div></div>
-            <div class="ct"><div class="ava" style="background:#6d5dfc">К</div><div><b>Команда</b><small>Марьяна: билд 0.4 залит</small></div><span class="badge">3</span></div>
+            <div class="ct"><div class="ava" style="background:#6d5dfc">К</div><div><b>Команда</b><small>Максим: билд 0.4 залит</small></div><span class="badge">3</span></div>
             <div class="ct"><div class="ava" style="background:#11a37f">Д</div><div><b>Даниил</b><small>Фото</small></div></div>
             <div class="ct"><div class="ava" style="background:#e8763a">М</div><div><b>Марьяна</b><small>Стикер</small></div></div>
             <div class="ct"><div class="ava" style="background:#17a2b8">М</div><div><b>Матвей</b><small>Голосовое · 0:24</small></div></div>
@@ -697,7 +697,7 @@ footer { padding: 40px 0 44px; }
       </div>
       <div class="float f-call">
         <div class="fc-title"><span class="live">Голосовой · Команда</span><small id="callTimer">12:48</small></div>
-        <div class="call-avas"><div class="ava speakable" style="background:#d9548a">А</div><div class="ava speakable" style="background:#3a8df0">И</div><div class="ava speakable" style="background:#e8763a">М</div></div>
+        <div class="call-avas"><div class="ava speakable" style="background:#3a8df0">М</div></div>
         <div class="call-ctl"><span><svg><use href="#i-mic"/></svg></span><span class="on"><svg><use href="#i-screen"/></svg></span><span class="end"><svg><use href="#i-end"/></svg></span></div>
       </div>
       <div class="float f-game"><div class="ava" style="background:#3a8df0">И</div>Игорь <em>играет в Factorio</em><svg><use href="#i-pad"/></svg></div>
@@ -776,16 +776,14 @@ footer { padding: 40px 0 44px; }
             <div class="ch"><svg><use href="#i-hash"/></svg>дизайн</div>
             <div class="cat">Голосовые</div>
             <div class="ch"><svg><use href="#i-vol"/></svg>Планёрка</div>
-            <div class="vu"><i class="speakable" style="background:#d9548a"></i>Андрей</div>
-            <div class="vu"><i class="speakable" style="background:#3a8df0"></i>Игорь<svg><use href="#i-screen"/></svg></div>
-            <div class="vu"><i class="speakable" style="background:#e8763a"></i>Марьяна</div>
+            <div class="vu"><i class="speakable" style="background:#3a8df0"></i>Максим<svg><use href="#i-screen"/></svg></div>
           </div>
           <div class="srv-feed">
-            <div class="panel-head"><svg><use href="#i-hash"/></svg><b>общий</b><small>· 18 участников</small></div>
+            <div class="panel-head"><svg><use href="#i-hash"/></svg><b>общий</b><small>· 1 участник</small></div>
             <div class="posts">
-              <div class="post"><div class="ava" style="background:#e8763a">М</div><div><div class="who">Марьяна <span class="role">Админ</span><small>19:20</small></div><p>Билд 0.4 залит, тестим всей командой</p></div></div>
-              <div class="post"><div class="ava" style="background:#3a8df0">И</div><div><div class="who">Игорь <span class="role">Модератор</span><small>19:22</small></div><p>Я в «Планёрке», показываю экран — подключайтесь</p></div></div>
-              <div class="post"><div class="ava" style="background:#11a37f">Д</div><div><div class="who">Даниил <small>19:25</small></div><p>Позову Мишу:</p>
+              <div class="post"><div class="ava" style="background:#3a8df0">М</div><div><div class="who">Максим <span class="role">Админ</span><small>19:20</small></div><p>Билд 0.4 залит, можно тестировать</p></div></div>
+              <div class="post"><div class="ava" style="background:#3a8df0">М</div><div><div class="who">Максим <small>19:22</small></div><p>Я в «Планёрке», показываю экран — подключайтесь</p></div></div>
+              <div class="post"><div class="ava" style="background:#3a8df0">М</div><div><div class="who">Максим <small>19:25</small></div><p>Позову Мишу:</p>
                 <div class="invite"><div class="sv" style="background:#6d5dfc">К</div><div><b>Команда</b><small>Приглашение на сервер</small></div><span class="go">Вступить</span></div>
               </div></div>
             </div>
@@ -812,14 +810,11 @@ footer { padding: 40px 0 44px; }
                 <div class="desk-url"><i></i><i></i><i></i><span>Общий браузер · билеты на август</span></div>
                 <div class="desk-page"><div class="hb"><u style="width:30%"></u><u style="width:16%;margin-left:auto"></u></div><div class="tk"><b style="background:#6d5dfc"></b><u></u><u></u></div><div class="tk sel"><b style="background:#e8763a"></b><u></u><u></u></div><div class="tk"><b style="background:#11a37f"></b><u></u><u></u></div><div class="hb ft"><u style="width:22%"></u><u style="width:12%"></u><u style="width:12%;margin-left:auto"></u></div></div>
               </div>
-              <div class="cur c1" style="left:22%;top:46%;color:#d9548a"><svg><use href="#i-cursor"/></svg><span style="background:#d9548a">Андрей</span></div>
-              <div class="cur c2" style="left:58%;top:58%;color:#3a8df0"><svg><use href="#i-cursor"/></svg><span style="background:#3a8df0">Игорь</span></div>
-              <div class="tag"><svg><use href="#i-globe"/></svg>Запустил Андрей</div>
+              <div class="cur c1" style="left:22%;top:46%;color:#3a8df0"><svg><use href="#i-cursor"/></svg><span style="background:#3a8df0">Максим</span></div>
+              <div class="tag"><svg><use href="#i-globe"/></svg>Запустил Максим</div>
             </div>
             <div class="people">
-              <div class="ptile"><div class="ava speakable" style="background:#d9548a">А</div><label>Андрей</label></div>
-              <div class="ptile"><div class="ava speakable" style="background:#3a8df0">И</div><label>Игорь</label><div class="wave"><i></i><i></i><i></i><i></i></div></div>
-              <div class="ptile"><div class="ava" style="background:#e8763a">М</div><label>Марьяна</label><span class="muted"><svg><use href="#i-mic-off"/></svg></span></div>
+              <div class="ptile"><div class="ava speakable" style="background:#3a8df0">М</div><label>Максим</label><div class="wave"><i></i><i></i><i></i><i></i></div></div>
             </div>
           </div>
           <div class="call-bar">
@@ -1124,7 +1119,7 @@ footer { padding: 40px 0 44px; }
     { side: "out", text: "Давай в 8, кину ссылку в канал" },
     { side: "in", text: "Только включи демонстрацию экрана, у меня второй монитор", react: "👍" },
     { side: "out", text: "Договорились. И общий браузер запустим" },
-    { side: "in", text: "Отлично, Марьяна тоже подключится" }
+    { side: "in", text: "Отлично, Максим тоже подключится" }
   ];
   const pad = (n) => String(n).padStart(2, "0");
   const clock = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
