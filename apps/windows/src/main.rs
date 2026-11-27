@@ -36,8 +36,13 @@ fn ensure_single_instance_or_focus_existing() {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{CreateEventW, CreateMutexW, OpenEventW, SetEvent};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        AllowSetForegroundWindow, FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+    // EVENT_MODIFY_STATE: SetEvent на чужое событие, больше ничего не нужно.
+    const EVENT_MODIFY_STATE: u32 = 0x0002;
 
     let mutex_name: Vec<u16> = OsStr::new("Local\\ZaliMessengerSingleInstanceMutex")
         .encode_wide()
@@ -50,8 +55,39 @@ fn ensure_single_instance_or_focus_existing() {
         // to release here. The OS holds the mutex for as long as this process is
         // alive and frees it automatically on exit, whether or not the handle is
         // ever explicitly closed.
+        //
+        // Рядом с мьютексом — событие «покажи окно»: второй запуск зовёт им первый
+        // экземпляр (`start_show_listener` → тот же `AppEvent::TrayShow`, что и клик
+        // по значку в трее).
+        let event_name: Vec<u16> = OsStr::new(SHOW_EVENT_NAME).encode_wide().chain(Some(0)).collect();
+        let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, event_name.as_ptr()) };
+        SHOW_EVENT.store(event as usize, std::sync::atomic::Ordering::Release);
         return;
     }
+
+    // Второй запуск. Окно первого экземпляра чаще всего спрятано в трее
+    // (`window.set_visible(false)`, см. handle_close_request), и показывать его
+    // чужим `ShowWindow` нельзя: tao не знает про такой показ, считает окно скрытым и
+    // прячет его снова при ближайшем пересчёте флагов, а страница не узнаёт, что окно
+    // вернулось. Жалоба: «если что-то остаётся в трее, при открытии окно не появляется».
+    // Поэтому — событие: первый экземпляр сам пройдёт путь «Открыть» из трея.
+    // Процесс, запущенный пользователем, вправе отдать первому право на передний план.
+    // Запуск автозапуском (`--start-minimized`) окно не просит: вход в Windows при
+    // уже работающем экземпляре не должен выпрыгнуть поверх чужих дел.
+    if std::env::args().any(|arg| arg == native::START_MINIMIZED_ARG) {
+        std::process::exit(0);
+    }
+    unsafe { AllowSetForegroundWindow(u32::MAX) };
+    let event_name: Vec<u16> = OsStr::new(SHOW_EVENT_NAME).encode_wide().chain(Some(0)).collect();
+    let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, event_name.as_ptr()) };
+    if !event.is_null() {
+        unsafe {
+            SetEvent(event);
+            CloseHandle(event);
+        }
+        std::process::exit(0);
+    }
+    // Нет события — первый экземпляр старой сборки (его не слушает никто): прежний путь.
 
     let title: Vec<u16> = OsStr::new("Zali Messenger").encode_wide().chain(Some(0)).collect();
     unsafe {
@@ -62,6 +98,34 @@ fn ensure_single_instance_or_focus_existing() {
         }
     }
     std::process::exit(0);
+}
+
+/// Имя события «покажи окно» (см. `ensure_single_instance_or_focus_existing`).
+#[cfg(target_os = "windows")]
+const SHOW_EVENT_NAME: &str = "Local\\ZaliMessengerShowWindowEvent";
+
+/// Дескриптор этого события у первого экземпляра (0 — не создан).
+#[cfg(target_os = "windows")]
+static SHOW_EVENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Поток, который ждёт второго запуска и превращает его в `AppEvent::TrayShow`.
+#[cfg(target_os = "windows")]
+fn start_show_listener(proxy: tao::event_loop::EventLoopProxy<AppEvent>) {
+    use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+    let handle = SHOW_EVENT.load(std::sync::atomic::Ordering::Acquire);
+    if handle == 0 {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("zali-show-listener".into()).spawn(move || loop {
+        // WAIT_OBJECT_0 == 0; любой другой исход (ошибка дескриптора) — выходим.
+        if unsafe { WaitForSingleObject(handle as *mut std::ffi::c_void, INFINITE) } != 0 {
+            return;
+        }
+        info!("Second launch requested the window");
+        if proxy.send_event(AppEvent::TrayShow).is_err() {
+            return;
+        }
+    });
 }
 
 /// Must match the `app_id` toasts are sent under (`show_message_notification` in
@@ -674,6 +738,8 @@ fn main() -> wry::Result<()> {
     #[cfg(target_os = "macos")]
     let _macos_menu = install_macos_menu();
     let proxy = event_loop.create_proxy();
+    #[cfg(target_os = "windows")]
+    start_show_listener(proxy.clone());
 
     #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
     let mut window_builder = WindowBuilder::new()
@@ -947,6 +1013,8 @@ fn main() -> wry::Result<()> {
                 *control_flow = ControlFlow::Exit;
             }
             Event::UserEvent(AppEvent::TrayShow) => {
+                // Свёрнутое окно `set_visible(true)` не разворачивает.
+                window.set_minimized(false);
                 window.set_visible(true);
                 window.set_focus();
                 webview.focus();
