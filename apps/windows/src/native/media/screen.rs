@@ -868,6 +868,51 @@ fn screen_audio_include_pid(ctx: &StartContext, stop: &AtomicBool, out: &mut Scr
     }
 }
 
+/// Не раньше этого после открытия захвата проверяем, не появился ли новый процесс в
+/// вырезаемом дереве: без паузы каждый свежий процесс, успевший родиться за время
+/// открытия, перезапускал бы захват по кругу.
+const REOPEN_MIN_AGE: Duration = Duration::from_millis(1500);
+
+/// Все процессы дерева `root` (включая сам корень) по снимку процессов.
+fn tree_pids(procs: &[privacy::ProcInfo], root: u32) -> std::collections::HashSet<u32> {
+    let parent: HashMap<u32, u32> = procs.iter().map(|p| (p.pid, p.parent)).collect();
+    let mut out = std::collections::HashSet::new();
+    for p in procs {
+        let mut cur = p.pid;
+        for _ in 0..64 {
+            if cur == root {
+                out.insert(p.pid);
+                break;
+            }
+            match parent.get(&cur) {
+                Some(&pp) if pp != 0 && pp != cur => cur = pp,
+                _ => break,
+            }
+        }
+    }
+    out
+}
+
+/// Появился ли в дереве `root` процесс, которого не было при открытии захвата. Нашёл —
+/// `(pid, имя)`, и он сразу попадает в `known`. Зачем: голоса звонка играет аудио-служба
+/// WebView2 — отдельный процесс-потомок, который Chromium гасит в простое и поднимает
+/// заново с первым звуком, то есть уже ПОСЛЕ того, как мы открыли process loopback в
+/// режиме «всё, кроме нашего дерева». Попадает ли такой поздний потомок в исключение —
+/// Windows не обещает, и стрим уносил голоса собеседников (жалоба 2026-11-27, третья).
+/// Заново открытый захват видит дерево таким, какое оно сейчас. Мы не знаем наверняка, что
+/// причина именно эта (на живой Windows не воспроизводилось), — строка в журнале
+/// покажет, перезапускался ли захват.
+fn new_audio_process(procs: &[privacy::ProcInfo], root: u32, known: &mut std::collections::HashSet<u32>) -> Option<(u32, String)> {
+    let now = tree_pids(procs, root);
+    // Только процессы WebView2: остальные потомки (вспомогательные утилиты) звук звонка не играют.
+    let fresh = procs
+        .iter()
+        .find(|p| p.id == "msedgewebview2" && now.contains(&p.pid) && !known.contains(&p.pid))
+        .map(|p| (p.pid, p.id.clone()));
+    *known = now;
+    fresh
+}
+
 fn screen_audio_exclude_self(ctx: &StartContext, stop: &AtomicBool, out: &mut ScreenAudioOut) -> AudioLoop {
     let (inside, outside) = webview2_tree_census();
     // outside — процессы WebView2 любых приложений, не только наши: тревожно, только если
@@ -885,6 +930,11 @@ fn screen_audio_exclude_self(ctx: &StartContext, stop: &AtomicBool, out: &mut Sc
         }
     };
     let mut generation = privacy::generation();
+    // Кто уже был в вырезаемом дереве при открытии захвата. Процесс, появившийся в нём
+    // позже, мог не попасть в исключение (см. `new_audio_process`) — захват открываем заново.
+    let mut known = tree_pids(&privacy_win::process_table(), root);
+    let opened = Instant::now();
+    let mut watched = Instant::now();
     while !stop.load(Ordering::Acquire) && !ctx.stopped() {
         let now_generation = privacy::generation();
         if now_generation != generation {
@@ -892,6 +942,13 @@ fn screen_audio_exclude_self(ctx: &StartContext, stop: &AtomicBool, out: &mut Sc
                 return AudioLoop::Switch;
             }
             generation = now_generation;
+        }
+        if opened.elapsed() >= REOPEN_MIN_AGE && watched.elapsed() >= Duration::from_millis(500) {
+            watched = Instant::now();
+            if let Some((pid, name)) = new_audio_process(&privacy_win::process_table(), root, &mut known) {
+                tracing::info!("[ZALI][WIN] media screen audio: new process in excluded tree pid={pid} ({name}) root={root}, reopening capture");
+                return AudioLoop::Switch;
+            }
         }
         if capture.read(10, &mut out.buf).is_err() {
             // Сменилось устройство вывода — process loopback переживает это сам; если

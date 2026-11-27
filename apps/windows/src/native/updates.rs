@@ -236,16 +236,27 @@ pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<
     // tries fail, the OLD binary is restarted, and the next login finds the same
     // newer release and offers it again. That is the update loop users hit: accepting
     // the update is precisely what restarts it. So an exhausted retry loop now
-    // re-runs this same script elevated (`-Verb RunAs`, i.e. a UAC prompt) and does a
-    // single copy from there, verifying the result with `fc /b` before declaring
-    // success — a declined UAC prompt must not be mistaken for a completed install.
-    let script = format!(
+    // runs a single elevated copy (`-Verb RunAs`, i.e. a UAC prompt) and verifies the
+    // result with `fc /b` before declaring success — a declined UAC prompt must not
+    // be mistaken for a completed install.
+    //
+    // Пути в сам скрипт НЕ вписываются. `.cmd` пишется в UTF-8, а `cmd.exe` читает
+    // батник в OEM-кодовой странице (cp866 на русской Windows), поэтому кириллица в
+    // имени пользователя (`C:\Users\Фёдор\AppData\...`) превращалась в кракозябры:
+    // copy не находил каталог, 60 попыток и запрос UAC уходили впустую, а в конце
+    // `start` показывал «Не удаётся найти …\ZaliMessenger.exe». Для таких
+    // пользователей автообновление не работало никогда. Теперь скрипт — чистый
+    // ASCII, а пути приходят переменными окружения процесса (они Unicode), и
+    // `cmd` раскрывает их уже в памяти, без обратного чтения из файла.
+    // Повышенная копия по той же причине — не повторный запуск скрипта (UAC не
+    // гарантирует унаследованное окружение), а `cmd /c copy`, команду которой
+    // PowerShell собирает сам из своего `$env:`.
+    let script = String::from(
         "@echo off\r\n\
          setlocal\r\n\
-         set \"SRC={new_exe}\"\r\n\
-         set \"DST={current_exe}\"\r\n\
-         set \"LOG={log}\"\r\n\
-         if /I \"%~1\"==\"elevated\" goto elevatedcopy\r\n\
+         set \"SRC=%ZALI_UPD_SRC%\"\r\n\
+         set \"DST=%ZALI_UPD_DST%\"\r\n\
+         set \"LOG=%ZALI_UPD_LOG%\"\r\n\
          set /a tries=0\r\n\
          :retry\r\n\
          set /a tries+=1\r\n\
@@ -260,7 +271,7 @@ pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<
          goto cleanup\r\n\
          :elevate\r\n\
          echo [%DATE% %TIME%] direct copy to \"%DST%\" failed after %tries% tries, asking for elevation>>\"%LOG%\"\r\n\
-         powershell -NoProfile -WindowStyle Hidden -Command \"Start-Process -FilePath '%~f0' -ArgumentList 'elevated' -Verb RunAs -Wait -WindowStyle Hidden\" >>\"%LOG%\" 2>&1\r\n\
+         powershell -NoProfile -WindowStyle Hidden -Command \"$q=[char]34; Start-Process -FilePath cmd.exe -ArgumentList ('/c copy /Y '+$q+$env:ZALI_UPD_SRC+$q+' '+$q+$env:ZALI_UPD_DST+$q) -Verb RunAs -Wait -WindowStyle Hidden\" >>\"%LOG%\" 2>&1\r\n\
          fc /b \"%SRC%\" \"%DST%\" >NUL 2>&1\r\n\
          if errorlevel 1 goto failed\r\n\
          echo [%DATE% %TIME%] updated to \"%SRC%\" via elevation>>\"%LOG%\"\r\n\
@@ -270,16 +281,11 @@ pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<
          echo [%DATE% %TIME%] could not replace \"%DST%\" (elevation declined or failed), restarting old version>>\"%LOG%\"\r\n\
          start \"\" \"%DST%\"\r\n\
          goto cleanup\r\n\
-         :elevatedcopy\r\n\
-         copy /Y \"%SRC%\" \"%DST%\" >>\"%LOG%\" 2>&1\r\n\
-         exit /b\r\n\
          :cleanup\r\n\
          del \"%SRC%\" >NUL 2>&1\r\n\
          (goto) 2>NUL & del \"%~f0\"\r\n",
-        new_exe = new_exe_path.display(),
-        current_exe = current_exe.display(),
-        log = log_path.display(),
     );
+    debug_assert!(script.is_ascii(), "скрипт обновления должен быть чистым ASCII");
     std::fs::write(&script_path, script).map_err(|e| e.to_string())?;
 
     trace(format!(
@@ -290,6 +296,9 @@ pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<
 
     std::process::Command::new("cmd")
         .args(["/C", &script_path.to_string_lossy()])
+        .env("ZALI_UPD_SRC", &new_exe_path)
+        .env("ZALI_UPD_DST", &current_exe)
+        .env("ZALI_UPD_LOG", &log_path)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| e.to_string())?;

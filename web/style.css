@@ -20385,6 +20385,15 @@ body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tiles {
     height: auto;
 }
 
+/* Место под полосу прокрутки занято всегда. fitVoiceTiles() выбирает число колонок по
+   ширине сетки; у вдвоём одна лишняя дробная доля пикселя в высоте включала
+   вертикальную полосу (классическую, не оверлейную), та съедала 6–15 px ширины,
+   fit выбирал другую расстановку, полоса пропадала — и так по кругу: две плитки
+   без остановки прыгали между «столбиком» и «рядом». */
+body .voice-panel:not(.has-stage) .voice-call-expanded-grid {
+    scrollbar-gutter: stable both-edges;
+}
+
 body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile {
     aspect-ratio: 16 / 9;
     min-width: 0;
