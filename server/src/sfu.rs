@@ -2293,6 +2293,25 @@ impl Engine {
                 s.viewer_plis.clear();
                 s.pli_penalty_until = Some(now + s.pli_penalty);
             }
+            // Явная перегрузка канала зрителя (потери > 8 % до повторов) — та же пауза роста,
+            // что и после серии PLI. Раньше при таких потерях сбрасывался только запас
+            // (proven_floor), и через 3 с проба снова поднимала слой экрана до полного: на
+            // канале ~1,3 Мбит/с зритель каждые ~10 с получал f → q → f → q (оценка прыгала
+            // 340 ↔ 6150 кбит/с, потери 8,6 %). Видео забивало общую очередь, и голоса звонка по
+            // прямым соединениям теряли 2–2,5 % пакетов при RTT 215–321 мс и буфере ~850 мс — «его
+            // слышно обрывками» (диагностика 2026-11-27, griboed). Вниз сверх оценки слой по-прежнему
+            // не режем (повторы закрывают случайные потери), только не растим и не пробуем.
+            if !pli_storm && loss > 0.08 && !s.pli_penalty_until.is_some_and(|t| now < t) {
+                let recent = s.pli_penalty_until.is_some_and(|t| now < t + Duration::from_secs(30));
+                if recent {
+                    s.pli_penalty = (s.pli_penalty * 2).min(Duration::from_secs(60));
+                }
+                debug!("[SFU] congestion viewer={} loss={:.1}% — пауза роста {}s", s.user, loss * 100.0, s.pli_penalty.as_secs());
+                s.probe_backoff = (s.probe_backoff * 2).min(Duration::from_secs(30));
+                s.proven_floor = 0.0;
+                s.trial = None;
+                s.pli_penalty_until = Some(now + s.pli_penalty);
+            }
             let penalty = s.pli_penalty_until.is_some_and(|t| now < t);
             // Случайные потери (Wi-Fi, мобильная сеть) классический GCC в str0m понимает как
             // «держать»: при 2–10 % оценка не растёт вовсе, и зритель навсегда оставался на
@@ -2311,7 +2330,11 @@ impl Engine {
             if let Some((until, base, rate)) = s.trial {
                 if now >= until {
                     s.trial = None;
-                    if loss <= (base + 0.03).max(0.05) {
+                    // Провал оценки вдвое за время пробы с хоть какими-то потерями — не
+                    // подтверждение: на узком канале проба «проходила» (потери < 5 %), запас
+                    // взлетал до 6 Мбит/с при ёмкости ~1,3, и слой снова забивал канал.
+                    let collapsed = s.probe_before.is_some_and(|before| estimate < before * 0.5) && loss > 0.01;
+                    if loss <= (base + 0.03).max(0.05) && !collapsed {
                         s.proven_floor = s.proven_floor.max(rate * 1.05);
                         s.probe_backoff = Duration::from_secs(3);
                     } else {
