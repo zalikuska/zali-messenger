@@ -390,6 +390,71 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Открытие чата внизу: раскладка всего окна (до ~140 пузырей, ~1200 объектов раскладки) одним
+    // кадром была самым длинным кадром смены чата. Верхние строки окна получают `.msg-defer`
+    // (content-visibility: hidden, высота — оценка из --msg-defer-h) и достраиваются по
+    // DEFER_CHUNK строк за кадр, от ближних к экрану к дальним. Каждый кусок сохраняет положение
+    // нижней строки на экране (scrollTop += сдвиг): `overflow-anchor: none`, и без этого рост строк
+    // над экраном сдвигал бы читаемое. Ввод человека (колесо, касание) на время достройки —
+    // достроить всё сразу. Возвращает состояние (onDone вызывается, когда все строки настоящие) или
+    // null, если откладывать нечего или движок content-visibility не знает.
+    deferOffscreenMessageRows(box, nodes, windowInfo, conversationKey) {
+        if (!box || !nodes || typeof requestAnimationFrame !== 'function') return null;
+        const total = nodes.length;
+        const keep = Math.max(28, (Number(windowInfo?.viewportCount) || 0) + 8);
+        if (total <= keep + 24) return null;
+        try {
+            if (typeof CSS === 'undefined' || !CSS.supports?.('content-visibility', 'hidden')) return null;
+        } catch (e) { return null; }
+        const store = this.messageHeightStore(conversationKey);
+        const avg = this.messageHeightAverage(store, Number(this.messageWindow?.avgHeight || 92));
+        const deferred = Array.prototype.slice.call(nodes, 0, total - keep);
+        const anchor = nodes[total - 1];
+        box.style.setProperty('--msg-defer-h', `${Math.max(24, Math.round(avg) - 8)}px`);
+        for (const node of deferred) node.classList.add('msg-defer');
+        const state = { next: deferred.length, onDone: null, raf: 0, carry: 0 };
+        box.__msgDefer = state;
+        const finish = (completed) => {
+            if (box.__msgDefer !== state) return;
+            box.__msgDefer = null;
+            box.style.removeProperty('--msg-defer-h');
+            if (completed && state.onDone) state.onDone();
+        };
+        // Свёрнутому окну кадров не дают — страховочный таймер, иначе строки остались бы оценками.
+        const schedule = () => {
+            let ran = false;
+            const run = () => { if (ran) return; ran = true; step(); };
+            state.raf = requestAnimationFrame(run);
+            setTimeout(run, 200);
+        };
+        const step = () => {
+            state.raf = 0;
+            if (box.__msgDefer !== state || !box.isConnected || !anchor.isConnected) { finish(false); return; }
+            const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const userActive = now - Number(this._msgUserScrollAt || 0) < 300;
+            const chunk = userActive ? state.next : ZaliInterface.DEFER_CHUNK;
+            const before = anchor.getBoundingClientRect().top;
+            for (let n = 0; n < chunk && state.next > 0; n += 1) {
+                state.next -= 1;
+                deferred[state.next].classList.remove('msg-defer');
+            }
+            // Целыми пикселями, остаток — в следующий кусок: иначе нижняя строка дрожала бы на 1–2 px.
+            const want = anchor.getBoundingClientRect().top - before + state.carry;
+            const apply = Math.round(want);
+            state.carry = want - apply;
+            if (apply !== 0) {
+                this.markProgrammaticScroll();
+                box.scrollTop += apply;
+            }
+            if (state.next > 0) schedule();
+            else finish(true);
+        };
+        schedule();
+        return state;
+    }
+
+    static get DEFER_CHUNK() { return 24; }
+
     // Height is not final at the moment we scroll: the virtual window's spacers are
     // sized from an average message height that this very render recalibrates, and
     // avatars/images/fonts settle a frame later. Scrolling once therefore left the

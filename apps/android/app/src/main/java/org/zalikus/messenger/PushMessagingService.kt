@@ -110,20 +110,31 @@ class PushMessagingService : FirebaseMessagingService() {
 
     /** Входящий звонок (server/src/push.rs, `send_incoming_call_push`) — см. IncomingCall.kt. */
     private fun onIncomingCall(data: Map<String, String>) {
-        // Приложение на экране звонит само — по сокету.
-        if (PushSession.appVisible) return
         val session = PushSession.load(applicationContext) ?: return
         if (!data["recipient"].orEmpty().equals(session.username, ignoreCase = true)) return
-        if (!MessageNotifier.canNotify(applicationContext)) return
         val roomId = data["roomId"].orEmpty()
         if (roomId.isEmpty()) return
-        CallNotifier.showIncoming(applicationContext, roomId, data["from"].orEmpty(), data["declineToken"].orEmpty())
+        val from = data["from"].orEmpty()
+        val declineToken = data["declineToken"].orEmpty()
+        // Приложение на экране звонит само — по сокету вебвью. Но этот сокет мог умереть в
+        // фоне, и пуш был единственным, что знало о звонке: раньше его здесь выбрасывали,
+        // и звонок пропадал без следа. Теперь страницу пинают, а если она так и не
+        // зазвонила — показываем уведомление (NativeBridge.ensureIncomingCallRings).
+        val bridge = NativeBridge.activeInstance
+        if (PushSession.appVisible && bridge != null) {
+            bridge.ensureIncomingCallRings(roomId, from, declineToken)
+            return
+        }
+        if (!MessageNotifier.canNotify(applicationContext)) return
+        if (CallNotifier.wasEnded(roomId)) return
+        CallNotifier.showIncoming(applicationContext, roomId, from, declineToken)
     }
 
     /** Звонок принят на другом устройстве, отклонён или пропущен — снять с экрана. */
     private fun onCallEnded(data: Map<String, String>) {
         val roomId = data["roomId"].orEmpty()
         if (roomId.isEmpty()) return
+        CallNotifier.markEnded(roomId)
         val wasRinging = CallNotifier.activeRoomId == roomId
         CallNotifier.dismiss(applicationContext, roomId)
         if (data["outcome"] != "missed" || PushSession.appVisible) return

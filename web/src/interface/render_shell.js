@@ -77,6 +77,10 @@ ZaliMixin(ZaliInterface, class {
             if (game && cnt === 0) {
                 preview = `<span class="contact-game"><span class="game-activity-text">${this.esc(this.gameActivityLabel(game))}</span></span>`;
             }
+            if (this.isUserBlocked(contact)) {
+                preview = '<span class="contact-blocked">Заблокирован</span>';
+            }
+            const shownName = this.contactDisplayName(contact);
             const gameBadge = game
                 ? `<span class="contact-game-badge" title="${this.esc(this.gameActivityLabel(game))}">${this.gameActivityIconHTML()}</span>`
                 : '';
@@ -88,7 +92,7 @@ ZaliMixin(ZaliInterface, class {
             return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}${pinned ? ' is-pinned' : ''}" data-name="${this.esc(contact)}">
                 ${this.presenceAvatarSlotHTML(contact, `<div class="ava"${this.profileOpenAttrs(contact)}>${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>`)}
                 <div class="contact-info">
-                    <div class="contact-name">${this.esc(contact)}${gameBadge}${pinBadge}</div>
+                    <div class="contact-name"${shownName !== contact ? ` title="${this.esc(`@${contact}`)}"` : ''}>${this.esc(shownName)}${gameBadge}${pinBadge}</div>
                     <div class="contact-prev">${preview}</div>
                 </div>
                 <div class="contact-actions">
@@ -610,6 +614,14 @@ ZaliMixin(ZaliInterface, class {
     renderServers(el = null) {
         const target = el || document.getElementById('contacts');
         if (!target) return;
+        // Пока человека тянут между каналами, список не перестраиваем: перерисовка
+        // (опрос состава, игра, аватарка) заменяет перетаскиваемый узел — dragend до
+        // него уже не доходит, остаются подсветка и «призрак». Дорисуем по окончании
+        // жеста (bindVoiceMemberDrag → clear).
+        if (this._voiceDrag) {
+            this._voiceRenderPending = true;
+            return;
+        }
         this.ensureServersState();
         // The servers themselves are the rail (interface/server_rail.js); the
         // sidebar lists the selected server's channels.

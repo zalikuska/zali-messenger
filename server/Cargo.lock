@@ -4371,6 +4371,7 @@ dependencies = [
  "jsonwebtoken",
  "jwt-simple",
  "lettre",
+ "libc",
  "openssl",
  "rand 0.8.6",
  "reqwest",

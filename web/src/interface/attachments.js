@@ -88,7 +88,7 @@ ZaliMixin(ZaliInterface, class {
         // (width/height) с первой же отрисовки нужной формы. Раньше кеш размеров
         // заполнялся только после декодирования и жил в памяти — после каждого запуска
         // любая картинка сначала стояла в рамке 16:9, а потом прыгала до своей формы.
-        if (size) this.mediaSizeCache.set(url, size);
+        if (size) this.rememberMediaSize(url, size.width, size.height);
         // Reverse lookup: the native download bridge needs the payload back — see
         // downloadAttachmentFromHref().
         this._attachmentBlobPayloads.set(url, value);
@@ -615,13 +615,86 @@ ZaliMixin(ZaliInterface, class {
         return 0;
     }
 
+    // --- Размеры медиа: в памяти и на диске ---------------------------------------
+    // Рамка GIF/фото/видео должна иметь нужную форму с первого кадра, иначе при
+    // подгрузке строка прыгает и лента уезжает. Размер известен только после загрузки,
+    // поэтому его запоминаем — и сохраняем в localStorage для http(s)-адресов (blob:/data:
+    // живут одну сессию, их ключи на диск не пишем). Тогда прыжок возможен лишь при самом
+    // первом показе файла на этом устройстве.
+    mediaSizesStorageKey() {
+        return 'zali_media_sizes_v1';
+    }
+
+    loadPersistedMediaSizes() {
+        if (this._mediaSizesLoaded) return;
+        this._mediaSizesLoaded = true;
+        try {
+            const raw = JSON.parse(localStorage.getItem(this.mediaSizesStorageKey()) || '[]');
+            if (!Array.isArray(raw)) return;
+            for (const item of raw) {
+                if (!Array.isArray(item)) continue;
+                const [url, width, height] = item;
+                if (typeof url === 'string' && width > 0 && height > 0 && !this.mediaSizeCache.has(url)) {
+                    this.mediaSizeCache.set(url, { width, height });
+                }
+            }
+        } catch (e) {
+            // повреждённый кеш — просто пустой
+        }
+    }
+
+    knownMediaSize(src) {
+        if (!src) return null;
+        this.loadPersistedMediaSizes();
+        return this.mediaSizeCache.get(src) || null;
+    }
+
+    rememberMediaSize(src, width, height) {
+        const w = Math.round(Number(width) || 0);
+        const h = Math.round(Number(height) || 0);
+        if (!src || w <= 0 || h <= 0) return;
+        this.loadPersistedMediaSizes();
+        const prev = this.mediaSizeCache.get(src);
+        if (prev && prev.width === w && prev.height === h) return;
+        // Повторная вставка двигает адрес в конец Map: свежие остаются, старые вытесняются.
+        this.mediaSizeCache.delete(src);
+        this.mediaSizeCache.set(src, { width: w, height: h });
+        if (!/^https?:/i.test(src)) return;
+        if (this._mediaSizesSaveTimer) return;
+        this._mediaSizesSaveTimer = setTimeout(() => {
+            this._mediaSizesSaveTimer = null;
+            try {
+                const rows = [];
+                for (const [url, size] of this.mediaSizeCache) {
+                    if (/^https?:/i.test(url)) rows.push([url, size.width, size.height]);
+                }
+                localStorage.setItem(this.mediaSizesStorageKey(), JSON.stringify(rows.slice(-600)));
+            } catch (e) {
+                // хранилище недоступно — размеры останутся только в памяти
+            }
+        }, 1500);
+    }
+
     mediaShellStyle(src, { gifLike = false, fallbackAspectRatio = '16 / 9' } = {}) {
         if (gifLike) return '';
-        const cached = src ? this.mediaSizeCache.get(src) : null;
+        const cached = this.knownMediaSize(src);
         const width = Number(cached?.width || 0);
         const height = Number(cached?.height || 0);
         const ratio = width > 0 && height > 0 ? `${width} / ${height}` : fallbackAspectRatio;
         return ratio ? ` style="aspect-ratio: ${ratio};"` : '';
+    }
+
+    // Рамка обычного видео: своя пропорция, ширина не больше натуральной и не выше
+    // 360 px по высоте (тот же предел, что у .media-video).
+    videoShellCss(w, h) {
+        const cap = Math.min(w, 360 * w / h, 360);
+        return `aspect-ratio: ${w} / ${h}; width: ${cap.toFixed(1)}px; max-width: 100%;`;
+    }
+
+    // GIF-ролик без рамки: тот же предел, что для GIF-картинок (360 px / 72vw по ширине,
+    // 340 px по высоте).
+    gifVideoCss(w, h) {
+        return `--gif-w: min(${w}px, 360px, 72vw, ${(340 * w / h).toFixed(1)}px); --gif-ratio: ${w} / ${h};`;
     }
 
     // Свой API-сервер и CDN Tenor — туда клиент и так ходит сам.
@@ -716,7 +789,22 @@ ZaliMixin(ZaliInterface, class {
 
         if (attachment.kind === 'video' || (attachment.mimeType || '').startsWith('video/')) {
             const shellClass = `discord-media-shell discord-media-shell-video${gifLike ? ' discord-media-shell-gif' : ''}${compact ? ' compact' : ''}`;
-            const shellStyle = this.mediaShellStyle(src, { gifLike });
+            // Форма рамки — по запомненному размеру: обычное видео получает рамку своей
+            // пропорции (раньше всегда 16:9 — вертикальное шло с чёрными полями), GIF-ролик —
+            // ширину и пропорцию через переменные (у .discord-media-shell-gif video width:
+            // auto !important, до метаданных там 300×150 и строка прыгала).
+            const knownVideo = this.knownMediaSize(src);
+            let shellStyle = this.mediaShellStyle(src, { gifLike });
+            let videoSizeAttrs = '';
+            if (knownVideo && !gifLike) {
+                const vw = Math.round(knownVideo.width);
+                const vh = Math.round(knownVideo.height);
+                shellStyle = ` style="${this.esc(this.videoShellCss(vw, vh))}"`;
+            } else if (knownVideo && gifLike) {
+                const vw = Math.round(knownVideo.width);
+                const vh = Math.round(knownVideo.height);
+                videoSizeAttrs = ` data-known-size="1" style="${this.esc(this.gifVideoCss(vw, vh))}"`;
+            }
             // autoplay/loop/muted belong to gif-like clips only. They used to be
             // set unconditionally, so every ordinary video message in the window
             // decoded and looped at once, forever, whether or not anyone had
@@ -724,7 +812,7 @@ ZaliMixin(ZaliInterface, class {
             // also started silent. A real video now waits for the play button.
             const gifPlayback = gifLike ? ' autoplay loop muted' : '';
             return `<div class="${shellClass}"${shellStyle}>
-                <video class="media media-video${compact ? ' compact' : ''}${gifLike ? ' media-gif-like' : ''}" data-gif-like="${gifLike ? '1' : '0'}" src="${this.esc(src)}"${showControls ? ' controls' : ''}${gifPlayback} playsinline preload="${gifLike ? 'auto' : 'metadata'}"></video>
+                <video class="media media-video${compact ? ' compact' : ''}${gifLike ? ' media-gif-like' : ''}" data-gif-like="${gifLike ? '1' : '0'}" src="${this.esc(src)}"${videoSizeAttrs}${showControls ? ' controls' : ''}${gifPlayback} playsinline preload="${gifLike ? 'auto' : 'metadata'}"></video>
             </div>`;
         }
 
@@ -734,7 +822,7 @@ ZaliMixin(ZaliInterface, class {
             const shellStyle = this.mediaShellStyle(src, { gifLike });
             // width/height — пропорции до загрузки: и у рамки фото, и у GIF без рамки
             // (там размер задаёт сама картинка, и до загрузки она была 0×0).
-            const known = this.mediaSizeCache.get(src);
+            const known = this.knownMediaSize(src);
             let sizeAttrs = '';
             if (known) {
                 const w = Math.round(known.width);

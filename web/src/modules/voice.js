@@ -71,6 +71,8 @@
                 joinedAt: {},
                 firstSeen: new Map(),
                 outgoingInvite: null,
+                // roomId исходящего приглашения, которое сервер подтвердил (voice_call_outgoing).
+                outgoingInviteAckedRoomId: '',
                 incomingInvite: null,
                 socket: null,
                 socketReady: false,

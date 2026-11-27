@@ -849,7 +849,14 @@ pub(crate) async fn send_incoming_call_push(
         let Some(account) = state.config.fcm_service_account.as_ref() else {
             return;
         };
-        let targets = match crate::fcm_targets_for(state, target, &crate::NotifyRoute::All).await {
+        // Все токены, без фильтра «смотрят в приложение» (`push_suppressed_for`). Для
+        // сообщения он верен — оно приходит по тому же сокету, что и присутствие. Звонок —
+        // нет: на Android присутствие шлёт нативный сокет, а звонок ждёт сокет вебвью, и
+        // они умирают порознь. Телефон с «живым» нативным сокетом и мёртвым сокетом вебвью
+        // не звонил вовсе (пуш глушился, а страница о звонке не знала). Двойного звонка
+        // нет: приложение на экране само решает, нужен ли ему пуш
+        // (PushMessagingService.onIncomingCall → ensureIncomingCallRings).
+        let targets = match crate::all_fcm_tokens(state, target).await {
             Ok(targets) => targets,
             Err(e) => {
                 warn!("Ошибка чтения FCM-токенов username={}: {}", target, e);

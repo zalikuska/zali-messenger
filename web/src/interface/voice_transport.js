@@ -268,6 +268,76 @@ ZaliMixin(ZaliInterface, class {
         }, deadlineMs);
     }
 
+    // Ждёт, пока `predicate()` станет истиной. true — дождались, false — вышло время.
+    waitVoiceCondition(predicate, timeoutMs, stepMs = 150) {
+        return new Promise((resolve) => {
+            const startedAt = Date.now();
+            let ticks = 0;
+            const tick = () => {
+                let ok = false;
+                try { ok = !!predicate(); } catch (e) {}
+                if (ok) { resolve(true); return; }
+                // Прошедшее время — большее из часов и числа тиков: у страницы в фоне
+                // таймеры замедлены (часы честнее), а в прогоне без настоящих часов
+                // (scripts/voice_doctor, виртуальное время) честнее тики.
+                const elapsed = Math.max(Date.now() - startedAt, ticks * stepMs);
+                if (elapsed >= timeoutMs) { resolve(false); return; }
+                ticks += 1;
+                setTimeout(tick, stepMs);
+            };
+            tick();
+        });
+    }
+
+    // Гарантирует, что по браузерному сокету сейчас можно слать сигнал звонка: он
+    // открыт И ответил на пинг (или только что открыт заново). Нужен перед тем, как
+    // на него положится то, что нельзя потерять, — приглашение на звонок.
+    //
+    // Зачем. На Android и iOS это единственный канал сигналинга звонков, а он живёт
+    // в WebView и после фона бывает «открыт», но мёртв (readyState === OPEN, пакеты
+    // уходят в пустоту): `sendVoiceEvent` честно отвечает «отправлено», приглашение
+    // не доходит, а звонящий слушает гудки до пропущенного. Проба тут — тот же пинг,
+    // что у сторожа полуоткрытого соединения, только с коротким вердиктом.
+    async ensureVoiceSocketAlive({ probeMs = 2500, connectMs = 8000, reason = '' } = {}) {
+        if (this.nativeSupports('voice')) return true;
+        if (typeof WebSocket === 'undefined') return true;
+        const socket = this.voice.socket;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            const pingAt = Date.now();
+            try {
+                this.voiceSocketLastPingAt = pingAt;
+                socket.send(JSON.stringify({ type: 'ping' }));
+            } catch (e) {}
+            const answered = () => (this.voiceSocketLastInboundAt || 0) >= pingAt;
+            await this.waitVoiceCondition(
+                () => answered() || this.voice.socket !== socket || socket.readyState !== WebSocket.OPEN,
+                probeMs,
+            );
+            if (this.voice.socket === socket && socket.readyState === WebSocket.OPEN) {
+                if (answered()) return true;
+                this.voiceDiag('socket-revalidate-dead', { reason, probeMs }, 'WARN');
+                // Не через close(): у пути, умершего без FIN, закрывающее рукопожатие
+                // тоже не завершится, и onclose пришлось бы ждать долго.
+                this.disconnectBrowserVoiceSocket();
+                this.setConnectionStatus(false);
+            }
+        }
+        const current = this.voice.socket;
+        if (!current || (current.readyState !== WebSocket.OPEN && current.readyState !== WebSocket.CONNECTING)) {
+            // Реконнект ждёт бэкоффа (до 30 с) — подключаемся сейчас.
+            if (this.voiceSocketReconnectTimer) {
+                clearTimeout(this.voiceSocketReconnectTimer);
+                this.voiceSocketReconnectTimer = null;
+            }
+            this.voiceSocketReconnectDelayMs = 1000;
+            void this.connectBrowserVoiceSocket();
+        }
+        return this.waitVoiceCondition(
+            () => !!this.voice.socket && this.voice.socket.readyState === WebSocket.OPEN,
+            connectMs,
+        );
+    }
+
     // Сеть вернулась (`online`) или вкладка снова перед глазами. Без этого браузерный
     // сокет — единственный realtime-канал PWA и сигналинг звонков Android/iOS —
     // узнавал об обрыве только на тике сторожа (до 25 с + 15 с), а реконнект, уже
@@ -431,6 +501,10 @@ ZaliMixin(ZaliInterface, class {
                 // уведомлений по активности (device_activity.js).
                 this.reportDeviceIdle({ force: true });
                 this.reportConversationView({ force: true });
+                // Приглашение, отправленное в уже мёртвый сокет, не получило подтверждения
+                // (voice_call_outgoing) и никогда не дойдёт само: сервер о звонке не знает.
+                // Новый сокет — самый ранний момент, когда его можно отправить заново.
+                this.resendUnackedOutgoingInvite?.('socket-opened');
                 // The browser-side counterpart of the native shells'
                 // voice_transport_state:'up'. iOS and Android both declare
                 // `voice: false` and therefore run on THIS socket, so without it

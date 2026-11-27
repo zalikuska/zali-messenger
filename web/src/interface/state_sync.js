@@ -162,6 +162,16 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // В голосовом канале сервера кто-то вошёл, вышел, перешёл или включил камеру
+        // (server/src/realtime.rs, broadcast_server_voice_changed): перечитать «кто в канале».
+        // Старый сервер события не шлёт — остаётся опрос раз в 5 с (ensureServerVoicePoll).
+        if (type === 'server_voice_changed') {
+            if (String(payload.serverId || '') === String(this.S.activeServer || '')) {
+                this.scheduleServerVoiceRefresh?.(120);
+            }
+            return true;
+        }
+
         // Казна сервера (server/src/treasury.rs): новый остаток и выплата вам с сервера.
         if (type === 'server_treasury_updated') {
             this.handleTreasuryRealtime(payload);

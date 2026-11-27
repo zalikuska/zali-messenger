@@ -304,6 +304,11 @@ def main():
         print(f"📂 Копирование файлов в ассеты Android: {android_web_dir}")
         shutil.copy2(html_path, os.path.join(android_web_dir, "index.html"))
         shutil.copy2(css_path, os.path.join(android_web_dir, "style.css"))
+        # <link rel="icon" href="icon.svg"> в index.html: без файла вебвью на каждой загрузке
+        # страницы тянул его из ассетов и получал «Unable to open asset URL» (52 раза в logcat).
+        icon_path = os.path.join(web_dir, "icon.svg")
+        if os.path.isfile(icon_path):
+            shutil.copy2(icon_path, os.path.join(android_web_dir, "icon.svg"))
         with open(os.path.join(android_web_dir, "app.js"), "w", encoding="utf-8") as f:
             f.write(bundled_js)
 

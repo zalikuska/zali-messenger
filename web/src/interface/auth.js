@@ -312,6 +312,11 @@ ZaliMixin(ZaliInterface, class {
             // Кеш, сохранённый до исправления, уже держит дубли записей о звонках
             // (текстом рядом с карточкой) — сводим их один раз при входе.
             for (const arr of Object.values(this.S.chats)) this.collapseCallRecordRows(arr);
+            // Мут чатов и каналов лежит под ключом аккаунта (mutedChatsStorageKey), а в
+            // конструкторе сессии ещё нет — ключ там выходил без логина и карта была
+            // пустой: после каждого перезапуска мут «спадал». Перечитываем здесь, когда
+            // S.session уже переставлен. Закрепления читаются лениво и от этого свободны.
+            this.S.mutedChats = this.loadStoredMutedChats();
             const cachedContacts = this.loadStoredContacts();
             const localContacts = this.localConversationContacts();
             this.S.contacts = Array.from(new Set([...cachedContacts, ...localContacts]))

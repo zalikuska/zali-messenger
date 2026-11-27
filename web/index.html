@@ -355,16 +355,17 @@
                         <div class="input-bar" id="inputBar">
                             <!-- Поле первым: все кнопки справа от него (2026-11-19). -->
                             <textarea id="msgInput" placeholder="Сообщение..." autocomplete="off" maxlength="4000" rows="1"></textarea>
-                            <button class="attach-btn" id="attachBtn" type="button" title="Прикрепить картинку или GIF" aria-label="Прикрепить картинку или GIF">
+                            <button class="attach-btn" id="attachBtn" type="button" title="Прикрепить файл" aria-label="Прикрепить файл">
                                 <svg class="ui-icon ui-icon-paperclip" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <path d="M8.1 12.75 13.72 7.1a3.04 3.04 0 0 1 4.3 4.3l-6.7 6.7a4.95 4.95 0 0 1-7-7l6.66-6.66a6.78 6.78 0 0 1 9.58 9.58l-6.82 6.82" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
                                     <path d="M8.72 12.78 14.2 7.3" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" opacity=".42"/>
                                 </svg>
                             </button>
                             <input id="attachmentInput" type="file" accept="image/*,video/*,.gif,.webp,.png,.jpg,.jpeg,.mp4,.webm,.tgs" multiple hidden>
-                            <!-- Стикеры .tgs из листа галереи на Android (media_sheet.js): без image/* в
-                                 accept оболочка открывает файловый менеджер, а не Photo Picker. -->
-                            <input id="stickerFileInput" type="file" accept=".tgs,application/x-tgsticker" multiple hidden>
+                            <!-- Любой файл (скрепка на десктопе, плитка «Файл» на Android, media_sheet.js):
+                                 без accept оболочка открывает файловый менеджер, а не Photo Picker.
+                                 .tgs из такого выбора по-прежнему уходит стикером (handleFiles). -->
+                            <input id="anyFileInput" type="file" multiple hidden>
                             <button class="attach-btn coin-transfer-btn" id="coinTransferBtn" type="button" title="Перевести ZaliCoin" aria-label="Перевести ZaliCoin">
                                 <svg class="ui-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.8"/>

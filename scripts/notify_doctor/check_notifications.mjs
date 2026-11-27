@@ -339,6 +339,36 @@ async function unreadAccounting() {
         `mark=${api.readMarkFor('dm:carol')}`, 'mark=время c1');
 }
 
+// Телефон: открыт СПИСОК чатов, выбранный чат целиком за краем экрана. Для вёрстки он «виден», но
+// его никто не читает: сообщение в него должно дать счётчик и уведомление, не сдвинуть отметку
+// «прочитано» и не сообщить серверу, что чат открыт (тот глушит пуши на всех устройствах).
+async function mobileListScreen() {
+    console.log('\n— телефон: список чатов вместо открытого чата —');
+    const { api, shown } = makeClient({ native: true, current: 'alice' });
+    let offscreen = true;
+    api.isMobileChatOffscreen = () => offscreen;
+    api.S.chats.alice = [{ id: 'a0', sender: 'alice', receiver: 'me', text: 'раньше', timestamp: at(0), status: 'sent', attachments: [] }];
+    api.receiveMessage({ id: 'l1', sender: 'alice', receiver: 'me', text: 'пока смотрю список', timestamp: at(10) });
+    check('чат за краем экрана — сообщение считается непрочитанным', api.S.unread.alice === 1,
+        `unread=${api.S.unread.alice || 0}: выбранный чат за списком принят за читаемый`, 'unread=1');
+    check('и уведомление показано', shown.length === 1, `${shown.length} уведомлений`, '1 уведомление');
+    check('отметка «прочитано» не сдвинулась', api.readMarkFor('dm:alice') === 0,
+        `mark=${api.readMarkFor('dm:alice')}`, 'mark=0');
+    check('серверу не сообщается «чат открыт»', api.currentViewedConversation() === '',
+        `viewed=${api.currentViewedConversation()}`, 'пусто');
+    api.clearAttendedConversationUnread();
+    check('возврат в список не сбрасывает счётчик', api.S.unread.alice === 1, `unread=${api.S.unread.alice || 0}`, 'unread=1');
+
+    offscreen = false;
+    check('чат вернулся на экран — серверу сообщается «открыт»', api.currentViewedConversation() === 'dm:alice',
+        `viewed=${api.currentViewedConversation()}`, 'dm:alice');
+    api.clearAttendedConversationUnread();
+    check('и счётчик снимается', !api.S.unread.alice, `unread=${api.S.unread.alice}`, 'unread=0');
+    check('отметка «прочитано» догнала сообщение', api.readMarkFor('dm:alice') === Date.parse(at(10)),
+        `mark=${api.readMarkFor('dm:alice')}`, 'mark=время сообщения');
+}
+
+await mobileListScreen();
 await unreadAccounting();
 await attendedGate();
 await catchUpBurst();

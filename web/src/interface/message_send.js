@@ -857,8 +857,15 @@ ZaliMixin(ZaliInterface, class {
         // field left out here is silently lost on live delivery and only reappears
         // after the next history reload.
         const reply = String(payload?.reply || '');
-        const serverId = payload?.serverId || payload?.server_id || null;
-        const channelId = payload?.channelId || payload?.channel_id || null;
+        // Старые оболочки Android слали JSON null как строку "null" (org.json optString) —
+        // личка уезжала бы в «канал null:null». Отбрасываем литералы здесь тоже, чтобы
+        // сборка с исправленным вебом, но не обновлённой оболочкой, не ломала доставку.
+        const cleanId = (value) => {
+            const text = String(value ?? '').trim();
+            return text && text !== 'null' && text !== 'undefined' ? text : null;
+        };
+        const serverId = cleanId(payload?.serverId) || cleanId(payload?.server_id);
+        const channelId = cleanId(payload?.channelId) || cleanId(payload?.channel_id);
         const clientId = String(payload?.clientId || payload?.client_id || '').trim();
         this.trace(`receiveMessage id=${String(id || '').trim()} clientId=${clientId || 'none'} sender=${String(sender || '').trim()} receiver=${String(receiver || '').trim()} server=${serverId || 'dm'} channel=${channelId || 'dm'} textBytes=${String(text || '').length} attachments=${Array.isArray(attachments) ? attachments.length : 0} reactions=${Array.isArray(reactions) ? reactions.length : 0}`);
         if (clientId) {
@@ -979,6 +986,8 @@ ZaliMixin(ZaliInterface, class {
         }
 
         const peer = sender === this.myName() ? receiver : sender;
+        // Заблокированный пишет в пустоту: не контакт, не чат, не счётчик.
+        if (sender !== this.myName() && this.isUserBlocked(sender)) return;
         this.ensureContact(peer);
         this.initChat(peer);
         const msgs = this.S.chats[peer];

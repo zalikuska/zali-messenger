@@ -15,7 +15,7 @@
 //! param is a plain `HICON` not `Option<HICON>`) — fixed against that feedback.
 //! A failure here is still designed to be silent (a missing badge), never a crash.
 
-use super::badge_render::{badge_label, badge_size_for_dpi, compose_badge};
+use super::badge_render::{badge_label, badge_size_for_dpi, center_mask, compose_badge};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -119,6 +119,9 @@ fn build_badge_icon(label: &str, size: i32) -> Option<HICON> {
 
     // Круг и текст собираются в чистом коде (badge_render.rs) и пишутся в тот же
     // DIB: предумноженный ARGB, красный круг с гладким краем.
+    // DT_VCENTER центрует строку шрифта, а не сами цифры (под ними нет «хвостов»),
+    // поэтому знак стоял выше центра круга: ставим его по границам пикселей.
+    let coverage = center_mask(size, &coverage);
     let composed = compose_badge(size, &coverage);
     let pixels = unsafe { std::slice::from_raw_parts_mut(pixel_ptr, composed.len()) };
     pixels.copy_from_slice(&composed);

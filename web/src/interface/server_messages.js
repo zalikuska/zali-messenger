@@ -611,8 +611,8 @@ ZaliMixin(ZaliInterface, class {
                 const who = this.S.current || this.myName();
                 this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(who, 'avatar-img', who));
             }
-            if (chatHdrName) chatHdrName.textContent = this.S.current || 'Выберите чат';
-            if (tbChat) tbChat.textContent = this.S.current || (this.S.contacts.length ? 'Выберите чат' : 'Нет контактов');
+            if (chatHdrName) chatHdrName.textContent = this.S.current ? this.contactDisplayName(this.S.current) : 'Выберите чат';
+            if (tbChat) tbChat.textContent = (this.S.current ? this.contactDisplayName(this.S.current) : '') || (this.S.contacts.length ? 'Выберите чат' : 'Нет контактов');
             if (chatHdrSub) {
                 chatHdrSub.innerHTML = '';
                 if (this.S.current) {

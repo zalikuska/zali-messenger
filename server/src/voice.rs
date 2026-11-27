@@ -474,6 +474,28 @@ pub(crate) async fn send_voice_room_snapshot_to_user(state: &Arc<AppState>, user
     }
 }
 
+/// Состав канала изменился — дать знать остальным участникам сервера (список каналов в
+/// боковой панели). Фоном: ни вход, ни выход не ждут рассылки. Для не-канальных комнат
+/// (личные звонки) и чужих идентификаторов ничего не делает: сервер берётся из самого
+/// ключа комнаты `voice:channel:<сервер>:<канал>`, потому что комнаты к этому моменту
+/// уже может не быть.
+fn notify_voice_roster_changed(state: &Arc<AppState>, room_id: &str) {
+    let Some(rest) = room_id.strip_prefix("voice:channel:") else {
+        return;
+    };
+    let Some((server_id, _)) = rest.split_once(':') else {
+        return;
+    };
+    if server_id.is_empty() {
+        return;
+    }
+    let state = Arc::clone(state);
+    let server_id = server_id.to_string();
+    tokio::spawn(async move {
+        crate::realtime::broadcast_server_voice_changed(&state, &server_id).await;
+    });
+}
+
 async fn broadcast_voice_room_state(state: &Arc<AppState>, room_id: &str) {
     // Copied out and the map guard dropped before the first await: the guard used to
     // live across every send below, holding a voice_rooms shard lock through
@@ -605,6 +627,9 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
         remove_room =
             room.participants.is_empty() || (room_type == "dm" && room.participants.len() <= 1);
     }
+
+    // Вышел из канала — остальным участникам сервера пора обновить «кто в канале».
+    notify_voice_roster_changed(state, &room_id);
 
     if reason == VoiceLeave::Explicit {
         if room_type == "dm" {
@@ -870,6 +895,7 @@ async fn join_voice_room(
 
     if roster_changed {
         broadcast_voice_room_state(state, room_id).await;
+        notify_voice_roster_changed(state, room_id);
     } else {
         // Idempotent re-join. Clients re-assert voice_join on a timer while in a
         // room (see sendVoiceRoomPresence in interface.js) so a transport blip past
@@ -1828,6 +1854,8 @@ pub(crate) async fn handle_voice_event(
             };
             if changed {
                 broadcast_voice_room_state(state, &room_id).await;
+                // «В эфире»/камера видны и в боковой панели у тех, кто не в комнате.
+                notify_voice_roster_changed(state, &room_id);
             }
         }
         "voice_call_invite" => {
@@ -1872,6 +1900,23 @@ pub(crate) async fn handle_voice_event(
                 );
                 send_voice_error(state, sender, &device, &room_key, "bad_request", "Некорректная комната звонка")
                     .await;
+                return;
+            }
+            // Повторное приглашение в уже принятый звонок — это клиент, не дождавшийся
+            // `voice_call_outgoing` и пославший его заново (voice_call.js,
+            // watchOutgoingInvite). Ответ мог уйти раньше, чем дошло подтверждение первого
+            // приглашения; сброс комнаты в `ringing` порвал бы живой звонок.
+            let already_answered = state.voice_rooms.get(&room_key).is_some_and(|room| {
+                room.room_type == "dm"
+                    && room.call_state == "active"
+                    && room.participants.contains(sender)
+                    && room.participants.contains(&target)
+            });
+            if already_answered {
+                info!(
+                    "[VOICE][INVITE] repeat invite for an answered call ignored sender={} target={} roomId={}",
+                    sender, target, room_key
+                );
                 return;
             }
             // Не больше трёх одновременно звонящих исходящих звонков с аккаунта.

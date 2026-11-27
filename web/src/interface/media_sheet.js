@@ -10,7 +10,7 @@
 // Без доступа к фото (не спрашивали, запретили) в листе камера и плашка с
 // «Разрешить» / «Открыть настройки»; «Альбомы» в шапке — системный пикер
 // (#attachmentInput → Photo Picker в MainActivity) при любом доступе. Плитка
-// «Стикер .tgs» — файловый менеджер (#stickerFileInput): .tgs не медиа.
+// «Файл» — файловый менеджер (#anyFileInput): документы и .tgs не медиа.
 ZaliMixin(ZaliInterface, class {
 
     openMediaSheet() {
@@ -68,9 +68,9 @@ ZaliMixin(ZaliInterface, class {
         else if (act === 'system') {
             this.closeMediaSheet();
             document.getElementById('attachmentInput')?.click();
-        } else if (act === 'sticker') {
+        } else if (act === 'file') {
             this.closeMediaSheet();
-            document.getElementById('stickerFileInput')?.click();
+            document.getElementById('anyFileInput')?.click();
         } else if (act === 'camera') {
             if (st.busy) return;
             this.postNativeMessage({ type: NativeMessageTypes.GALLERY_CAPTURE, requestId: st.requestId });
@@ -136,10 +136,10 @@ ZaliMixin(ZaliInterface, class {
                 ${this.uiIcon('plus')}<span>Выбрать ещё</span>
             </button>`);
         }
-        // Стикеры .tgs — не медиа: ни MediaStore, ни Photo Picker их не покажут, поэтому
-        // плитка открывает файловый менеджер (#stickerFileInput без image/* в accept).
-        tiles.push(`<button class="media-tile media-tile-action" type="button" data-media-act="sticker">
-            ${this.uiIcon('sticker')}<span>Стикер .tgs</span>
+        // Не-медиа (документы, архивы, .tgs) Photo Picker не покажет, поэтому плитка
+        // открывает файловый менеджер (#anyFileInput без accept).
+        tiles.push(`<button class="media-tile media-tile-action" type="button" data-media-act="file">
+            ${this.uiIcon('paperclip')}<span>Файл</span>
         </button>`);
         for (const item of st.items) tiles.push(this.mediaSheetTileHTML(item));
         let html = `<div class="media-sheet-grid">${tiles.join('')}</div>`;

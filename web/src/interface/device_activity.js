@@ -58,6 +58,9 @@ ZaliMixin(ZaliInterface, class {
 
     currentViewedConversation() {
         if (!this.S.session?.token || !this.isAppAttended()) return '';
+        // Телефон, открыт список чатов: выбранный чат за краем экрана — его никто не читает, и
+        // сообщать серверу «чат открыт» нельзя (он глушит пуши о нём на всех устройствах).
+        if (!this.isConversationOnScreen()) return '';
         if (this.S.navMode === 'servers') {
             const key = this.currentServerChatKey?.() || '';
             return key && this.isServerChatVisible(key) ? key : '';
@@ -77,7 +80,12 @@ ZaliMixin(ZaliInterface, class {
         // пропущенные звонки) больше не нужны. Не зависит от того, ушёл ли кадр по сокету.
         if (conversation !== this._lastClearedConversation) {
             this._lastClearedConversation = conversation;
-            if (conversation) this.clearConversationNotifications?.(conversation);
+            if (conversation) {
+                this.clearConversationNotifications?.(conversation);
+                // Чат снова перед глазами (телефон: вернулись из списка жестом, без switchChat) —
+                // накопленное, пока он был за краем экрана, прочитано.
+                this.clearAttendedConversationUnread?.();
+            }
         }
         const key = `${this.myName?.() || ''}|${deviceId}|${conversation}`;
         const heartbeatDue = conversation

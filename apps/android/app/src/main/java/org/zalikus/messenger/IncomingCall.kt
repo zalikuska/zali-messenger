@@ -90,6 +90,23 @@ object CallNotifier {
     var activeRoomId: String? = null
         private set
 
+    /**
+     * Звонки, о конце которых уже пришёл пуш `call_end`. Пуш «входящий» и пуш «закончился»
+     * ходят независимо: отложенный показ звонка (NativeBridge.ensureIncomingCallRings) не
+     * должен оживить уведомление о звонке, который успели отменить.
+     */
+    private val endedRooms = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+
+    fun markEnded(roomId: String) {
+        if (roomId.isEmpty()) return
+        synchronized(endedRooms) {
+            endedRooms.add(roomId)
+            while (endedRooms.size > 32) endedRooms.remove(endedRooms.first())
+        }
+    }
+
+    fun wasEnded(roomId: String): Boolean = endedRooms.contains(roomId)
+
     private fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (manager.getNotificationChannel(CHANNEL_ID) == null) {

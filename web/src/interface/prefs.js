@@ -926,6 +926,7 @@ ZaliMixin(ZaliInterface, class {
             </button>
         `).join('');
         nav.dataset.segmentSignature = signature;
+        this.observeHubSegmentGeometry(nav);
         this.syncHubSegmentIndicator();
         this.syncHubSegmentBadges();
     }
@@ -1025,6 +1026,29 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
+    // Кнопки панели поровну делят ширину (`flex: 1 1 0`), и класс `.active` размер не меняет,
+    // поэтому геометрию достаточно перемерять, когда ResizeObserver сообщил об изменении
+    // панели или кнопок. Колбэк идёт после раскладки — чтение там ничего не форсирует.
+    observeHubSegmentGeometry(nav) {
+        this._hubSegGeom = null;
+        if (typeof ResizeObserver !== 'function') return;
+        if (!this._hubSegObserver) {
+            this._hubSegObserver = new ResizeObserver(() => {
+                const current = document.getElementById('hubSegmentNav');
+                if (!current) return;
+                const geom = new Map();
+                current.querySelectorAll('.hub-segment-btn').forEach(btn => {
+                    geom.set(btn, { left: btn.offsetLeft, width: btn.offsetWidth });
+                });
+                this._hubSegGeom = geom;
+                this.syncHubSegmentIndicator();
+            });
+        }
+        this._hubSegObserver.disconnect();
+        this._hubSegObserver.observe(nav);
+        nav.querySelectorAll('.hub-segment-btn').forEach(btn => this._hubSegObserver.observe(btn));
+    }
+
     // Ставит индикатор под активную кнопку; ничего не делает, если он уже там
     // (или едет туда: мгновенная пересинхронизация оборвала бы идущий переезд).
     syncHubSegmentIndicator({ animate = false } = {}) {
@@ -1032,12 +1056,19 @@ ZaliMixin(ZaliInterface, class {
         const indicator = nav?.querySelector('.hub-segment-indicator');
         const activeBtn = nav?.querySelector('.hub-segment-btn.active');
         if (!nav || !indicator || !activeBtn) return;
-        const target = `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`;
+        // Геометрия — из кеша ResizeObserver (observeHubSegmentGeometry): offsetLeft/offsetWidth
+        // в этом месте — принудительная раскладка документа, который вызывающий только что
+        // поменял (switchChat, openSettingsView). Замер (Chromium ×6): 15 мс на переход,
+        // самая дорогая функция открытия настроек. Кеша ещё нет (до первого колбэка) — читаем.
+        const cached = this._hubSegGeom?.get(activeBtn);
+        const left = cached ? cached.left : activeBtn.offsetLeft;
+        const width = cached ? cached.width : activeBtn.offsetWidth;
+        const target = `${left}:${width}`;
         if (indicator.dataset.target === target) return;
         const animated = animate && !!indicator.dataset.target;
         indicator.style.transition = animated ? '' : 'none';
-        indicator.style.width = `${activeBtn.offsetWidth}px`;
-        indicator.style.transform = `translate3d(${activeBtn.offsetLeft}px, 0, 0)`;
+        indicator.style.width = `${width}px`;
+        indicator.style.transform = `translate3d(${left}px, 0, 0)`;
         indicator.dataset.target = target;
         if (!animated) {
             requestAnimationFrame(() => {

@@ -247,7 +247,14 @@ ZaliMixin(ZaliInterface, class {
             const src = video.currentSrc || video.src || video.getAttribute('src') || '';
             const cacheSize = (width, height) => {
                 if (!src || !width || !height) return;
-                this.mediaSizeCache.set(src, { width, height });
+                this.rememberMediaSize(src, width, height);
+                // Первый показ файла: размер узнали только сейчас — ставим форму в уже
+                // нарисованный ролик, чтобы следующие перерисовки не двигали строку.
+                if (!video.dataset.knownSize) {
+                    video.dataset.knownSize = '1';
+                    video.setAttribute('data-known-size', '1');
+                    video.style.cssText += this.gifVideoCss(Math.round(width), Math.round(height));
+                }
             };
 
             const ensurePlaying = () => {
@@ -293,6 +300,25 @@ ZaliMixin(ZaliInterface, class {
             ensurePlaying();
         });
 
+        // Обычные видео (не GIF-ролики): запоминаем настоящий размер и ставим рамке её
+        // пропорцию — без этого рамка всегда 16:9, а вертикальное видео шло с полями.
+        const plainVideos = root.querySelectorAll?.('video.media-video[data-gif-like="0"]:not([data-size-bound="1"])') || [];
+        plainVideos.forEach(video => {
+            if (!(video instanceof HTMLMediaElement)) return;
+            video.dataset.sizeBound = '1';
+            const shell = video.closest('.discord-media-shell');
+            const src = video.currentSrc || video.src || video.getAttribute('src') || '';
+            const sync = () => {
+                const width = Number(video.videoWidth || 0);
+                const height = Number(video.videoHeight || 0);
+                if (!src || !width || !height) return;
+                this.rememberMediaSize(src, width, height);
+                if (shell) shell.style.cssText = this.videoShellCss(Math.round(width), Math.round(height));
+            };
+            if (video.readyState >= 1) sync();
+            else video.addEventListener('loadedmetadata', sync, { once: true });
+        });
+
         // Covers every message-attachment image (not just gif-like ones): the shell's
         // box-shaping aspect-ratio is set from mediaSizeCache at render time, but on
         // first render nothing is cached yet, so it falls back to a hardcoded 16:9 box.
@@ -310,7 +336,7 @@ ZaliMixin(ZaliInterface, class {
                 const width = Number(img.naturalWidth || 0);
                 const height = Number(img.naturalHeight || 0);
                 if (!src || !width || !height) return;
-                this.mediaSizeCache.set(src, { width, height });
+                this.rememberMediaSize(src, width, height);
                 if (shell && !img.classList.contains('media-gif-like')) {
                     shell.style.aspectRatio = `${width} / ${height}`;
                 }
@@ -409,7 +435,7 @@ ZaliMixin(ZaliInterface, class {
         const name = String(username || '').trim();
         if (!name) return '';
         const mapped = this._senderDisplayNames?.get(name.toLowerCase());
-        return mapped || name;
+        return this.localNickname(name) || mapped || name;
     }
 
     rememberSenderDisplayName(username, displayName) {
@@ -937,7 +963,7 @@ ZaliMixin(ZaliInterface, class {
 
     activeMessagesSignature() {
         if (this.S.navMode === 'servers') {
-            const key = this.serverChatKey();
+            const key = this.currentServerChatKey();
             return (this.S.serverChats?.[key] || []).map(msg => this.messageStableSignature(msg)).join('|');
         }
         const peer = this.S.current;

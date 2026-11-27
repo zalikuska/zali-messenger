@@ -487,7 +487,7 @@ function scrollAndRedeliveryDoNotRerender() {
     // и наполнялся после декодирования), а с width: 100% в подстраивающемся пузыре
     // до загрузки схлопывалась в полоску — строка прыгала, окно виртуализации сбивалось.
     check('размер картинки известен до загрузки (заголовок файла → рамка и width/height)',
-        /size = this\.imageSizeFromBytes\(bytes\)/.test(attachments) && /this\.mediaSizeCache\.set\(url, size\)/.test(attachments)
+        /size = this\.imageSizeFromBytes\(bytes\)/.test(attachments) && /this\.rememberMediaSize\(url, size\.width, size\.height\)/.test(attachments)
         && /sizeAttrs = ` width="\$\{this\.esc\(String\(w\)\)\}" height="\$\{this\.esc\(String\(h\)\)\}" style="width: \$\{this\.esc\(width\)\};"`/.test(attachments),
         'картинка снова получает размер только после декодирования');
     check('картинка из памяти грузится сразу (без loading=lazy)',

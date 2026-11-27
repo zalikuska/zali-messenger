@@ -81,6 +81,11 @@ path = "../tests/settings_sync.rs"
 name = "browser_profiles"
 path = "../tests/browser_profiles.rs"
 
+[target.'cfg(unix)'.dependencies]
+# statvfs: свободное место раздела uploads/ для очистки вложений (attachment_gc.rs).
+# Уже в Cargo.lock как транзитивная — здесь только делается прямой.
+libc = "0.2"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }

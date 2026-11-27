@@ -335,7 +335,7 @@ class MainActivity : ComponentActivity() {
      * `"image/" + "*"` — буквально здесь не пишется, Kotlin счёл бы это началом
      * вложенного комментария). В пикере нет файлов, не являющихся медиа, поэтому
      * стикеры `.tgs` веб выбирает отдельным полем без картинок в `accept`
-     * (`#stickerFileInput`, плитка «Стикер .tgs» в листе галереи) — оно попадает
+     * (`#anyFileInput`, плитка «Файл» в листе галереи) — оно попадает
      * сюда с null и открывает файловый менеджер.
      */
     private fun photoPickerMediaType(
@@ -688,6 +688,13 @@ class MainActivity : ComponentActivity() {
                                     )
                                     applyOrientation()
                                 }
+
+                                // Пока у <video> нет первого кадра, WebView рисует «постер по
+                                // умолчанию» — чёрный треугольник на белом, растянутый на весь
+                                // элемент (полсекунды при старте любого видео). Подменяем его
+                                // прозрачной точкой: под ней остаётся фон оболочки медиа.
+                                override fun getDefaultVideoPoster(): Bitmap? =
+                                    Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
 
                                 override fun onHideCustomView() {
                                     val view = customView ?: return

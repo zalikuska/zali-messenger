@@ -595,7 +595,10 @@ button {
     stroke-width: 1.9;
     stroke-linecap: round;
     stroke-linejoin: round;
-    transition: transform .22s cubic-bezier(.2,1.2,.24,1), stroke-width .22s var(--ease-out);
+    /* stroke-width не анимируем: это перерисовка SVG в главном потоке на каждом кадре
+       переключения вкладки (замер 2026-11-27: убрать её — минус 5–25 пп «рваных» кадров).
+       Толщина линии активной иконки меняется сразу, scale по-прежнему на композиторе. */
+    transition: transform .22s cubic-bezier(.2,1.2,.24,1);
 }
 
 .mobile-dock-label {
@@ -619,9 +622,16 @@ button {
    всю анимацию; «рост» был scale на капсуле, и копия масштабировалась вместе с ней
    мимо настоящих кнопок. Без @property переменные не анимируются — капсула тогда
    встаёт сразу, но копия всё равно совпадает. */
-@property --tx { syntax: '<length>'; inherits: true; initial-value: 6px; }
-@property --tw { syntax: '<length>'; inherits: true; initial-value: 0px; }
-@property --tg { syntax: '<length>'; inherits: true; initial-value: 0px; }
+/* inherits:false — замер на телефоне (трасса DevTools, 2026-11-27): переменные
+   анимируются в главном потоке КАЖДЫЙ кадр, и при inherits:true каждый кадр
+   пересчитывал стили всего поддерева капсулы (~40 элементов, 5–8 мс за проход, около
+   140 мс на одно касание по доку). Читают их только сама капсула и её прямой
+   потомок .mobile-dock-ink, который берёт значение явным `inherit` (ниже): картинка
+   та же, пересчёт — два элемента вместо сорока. Доля «рваных» кадров на переключении
+   вкладок: 62% → ~50%. */
+@property --tx { syntax: '<length>'; inherits: false; initial-value: 6px; }
+@property --tw { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --tg { syntax: '<length>'; inherits: false; initial-value: 0px; }
 
 .mobile-dock-thumb {
     position: absolute;
@@ -650,6 +660,8 @@ button {
 /* Тёмные подписи внутри капсулы (см. setupMobileDockDrag): ряд кнопок в натуральную величину,
    сдвинутый на -tx, чтобы совпадать с доком; обрезается по капсуле. */
 .mobile-dock-ink {
+    --tx: inherit;
+    --tg: inherit;
     position: absolute;
     top: calc(var(--ink-y, 0px) + var(--tg, 0px));
     left: calc(var(--ink-x, 0px) - var(--tx, 0px) + var(--tg, 0px));
@@ -3201,7 +3213,20 @@ body[data-nav-mode="servers"] .contacts {
     gap: 10px;
     cursor: default;
     background: var(--bg);
-    box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb),calc(.26 * var(--glow-k)));
+    position: relative;
+    isolation: isolate;
+}
+
+/* Пульс подкраски — прозрачность отдельного слоя под содержимым (композитор), а не
+   inset box-shadow на самой строке: тот перерисовывался на каждом кадре, пока звонит. */
+.voice-call-strip .voice-callbar-incoming::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: rgba(var(--accent-rgb),calc(.34 * var(--glow-k)));
     animation: voiceIncomingPulse 1.6s ease-in-out infinite;
 }
 
@@ -3242,8 +3267,8 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 @keyframes voiceIncomingPulse {
-    0%, 100% { box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb),calc(.18 * var(--glow-k))); }
-    50% { box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb),calc(.34 * var(--glow-k))); }
+    0%, 100% { opacity: .53; }
+    50% { opacity: 1; }
 }
 
 @media (max-width: 520px) {
@@ -3257,7 +3282,7 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .voice-call-strip .voice-callbar-incoming {
+    .voice-call-strip .voice-callbar-incoming::before {
         animation: none;
     }
 }
@@ -6407,6 +6432,13 @@ span.msg-sender:hover {
    рамки, ни заливки: девять обведённых кружков подряд — это девять рамок
    в объекте высотой 42 px, и глаз читает сетку, а не эмодзи. Обводка тут
    лишняя ещё и потому, что у всей полосы уже есть своя. */
+/* Открытие чата: верхние строки окна на первом кадре не раскладываются и достраиваются по кадрам
+   (viewport.js: deferOffscreenMessageRows). Высота — оценка; убирается тем же кодом. */
+#msgs > .msg.msg-defer {
+    content-visibility: hidden;
+    contain-intrinsic-block-size: var(--msg-defer-h, 90px);
+}
+
 .reaction-menu {
     position: fixed;
     z-index: 140;
@@ -6834,6 +6866,13 @@ span.msg-sender:hover {
     max-height: 340px;
     object-fit: contain;
     background: transparent !important;
+}
+
+/* Размер GIF-ролика известен заранее (attachments.js: gifVideoCss, запомненный размер):
+   ширина и пропорция задаются сразу, а не после метаданных — строка не прыгает. */
+.discord-media-shell-gif video[data-known-size] {
+    width: var(--gif-w) !important;
+    aspect-ratio: var(--gif-ratio);
 }
 
 .discord-media-shell-image.discord-media-shell-gif img,
@@ -9201,7 +9240,7 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
 .zc-bar {
     display: flex;
     align-items: stretch;
-    gap: 2px;
+    gap: 1px;
     height: 20px;
 }
 
@@ -9210,10 +9249,10 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
    последний сегмент за край полосы. У каждого сегмента свои скруглённые концы. */
 .zc-segment {
     flex: 1 1 0;
-    min-width: 6px;
+    min-width: 4px;
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: pointer;
     transition: filter .15s var(--ease-out), transform .15s var(--ease-out);
 }
@@ -10533,8 +10572,7 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
     .msg.out .bubble { border-radius: 19px; }
     .msg.in.group-start  .bubble { border-bottom-left-radius: 7px; }
     .msg.in.group-mid    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
-    .msg.in.group-end    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
-    .msg.in.group-single .bubble { border-bottom-left-radius: 7px; }
+    .msg.in.group-end    .bubble { border-top-left-radius: 7px; }
     .msg.out.group-start  .bubble { border-bottom-right-radius: 7px; }
     .msg.out.group-mid    .bubble { border-top-right-radius: 7px; border-bottom-right-radius: 7px; }
     .msg.out.group-end    .bubble { border-top-right-radius: 7px; border-bottom-right-radius: 7px; }
@@ -13975,9 +14013,12 @@ body[data-design-mode="focus"] .auth-card::before {
    свечений и градиентов. Разметку рисует voice_ui.js; карточка комнаты несёт
    data-voice-status (incoming/calling/connecting/…) для анимации ожидания. */
 
+/* Только opacity: с transform: scale() точка в 7 px гнала по полному кругу стиль →
+   Paint ×2 → Layerize на КАЖДОМ кадре всё время звонка (Chromium ×6, трассировка:
+   519 мс за 12 с против 33 мс без анимации). Прозрачность одна уходит в композитор. */
 @keyframes focus-live-dot {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: .35; transform: scale(.8); }
+    0%, 100% { opacity: 1; }
+    50% { opacity: .3; }
 }
 
 @keyframes focus-ring-wave {
@@ -14317,13 +14358,17 @@ body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
 }
 
 @keyframes voice-live-dot {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: .35; transform: scale(.75); }
+    0%, 100% { opacity: 1; }
+    50% { opacity: .3; }
 }
 
+/* Волна звонка — кольцо-псевдоэлемент, которое растёт и гаснет: transform + opacity уходят в
+   композитор. Раньше волной был box-shadow со spread на самом аватаре — перерисовка на каждом
+   кадре всё время, пока звонит (Chromium ×6, трассировка за 8 с: стиль + Paint + Layerize
+   766 мс против 124 мс без волны). Конец роста — --ring-scale хозяина кольца. */
 @keyframes voice-ring-wave {
-    0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb),calc(.55 * var(--glow-k))); }
-    100% { box-shadow: 0 0 0 18px rgba(var(--accent-rgb),calc(0 * var(--glow-k))); }
+    0% { transform: scale(1); opacity: calc(.7 * var(--glow-k)); }
+    100% { transform: scale(var(--ring-scale, 1.9)); opacity: 0; }
 }
 
 @keyframes voice-phone-ring {
@@ -14545,6 +14590,17 @@ body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
     color: rgba(var(--accent-fg-rgb));
     font-size: 14px;
     font-weight: 800;
+}
+
+.voice-incoming-ava::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid rgb(var(--accent-rgb));
+    opacity: 0;
+    pointer-events: none;
+    --ring-scale: 2.1;
     animation: voice-ring-wave 1.5s ease-out infinite;
 }
 
@@ -14702,13 +14758,16 @@ body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
     position: absolute;
     inset: 0;
     border-radius: 50%;
+    border: 2px solid rgb(var(--accent-rgb));
+    opacity: 0;
     pointer-events: none;
+    --ring-scale: 1.5;
     animation: voice-ring-wave 1.5s ease-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
     .voice-compact-dot,
-    .voice-incoming-ava,
+    .voice-incoming-ava::before,
     .voice-incoming-btn.is-accept .call-ctrl-icon,
     .voice-room-card[data-voice-status="calling"] .voice-tile:not(.mine) .voice-tile-person::after {
         animation: none;
@@ -15487,7 +15546,15 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     display: none !important;
 }
 
-.chat-hdr.is-ringing .chat-hdr-ava {
+.chat-hdr.is-ringing .chat-hdr-ava-slot::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid rgb(var(--accent-rgb));
+    opacity: 0;
+    pointer-events: none;
+    --ring-scale: 2;
     animation: voice-ring-wave 1.5s ease-out infinite;
 }
 
@@ -15527,7 +15594,7 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .chat-hdr.is-ringing .chat-hdr-ava {
+    .chat-hdr.is-ringing .chat-hdr-ava-slot::before {
         animation: none;
     }
 }
@@ -19613,6 +19680,11 @@ body[data-design-mode="focus"] .zc-card-status {
 
     .server-modal-nav-btn {
         flex: none;
+        /* Базовое правило даёт width:100% — в горизонтальной ленте каждая вкладка
+           занимала всю ширину, видна была одна «Обзор», остальные (Каналы, Роли,
+           Участники) уезжали за экран без подсказки. */
+        width: auto;
+        white-space: nowrap;
         min-height: 40px;
     }
 
@@ -23171,10 +23243,9 @@ body[data-msg-side="one"] .msg.out.group-end .bubble { border-top-left-radius: 6
         border-top-right-radius: var(--m-bubble-r, 20px);
         border-bottom-right-radius: var(--m-bubble-r, 20px);
     }
-    html body[data-design-mode][data-msg-side="one"] #viewChat .msg.out.group-start .bubble,
-    html body[data-design-mode][data-msg-side="one"] #viewChat .msg.out.group-single .bubble { border-bottom-left-radius: var(--m-bubble-join, 6px); }
-    html body[data-design-mode][data-msg-side="one"] #viewChat .msg.out.group-mid .bubble,
-    html body[data-design-mode][data-msg-side="one"] #viewChat .msg.out.group-end .bubble { border-top-left-radius: var(--m-bubble-join, 6px); border-bottom-left-radius: var(--m-bubble-join, 6px); }
+    html body[data-design-mode][data-msg-side="one"] #viewChat .msg.out.group-start .bubble { border-bottom-left-radius: var(--m-bubble-join, 6px); }
+    html body[data-design-mode][data-msg-side="one"] #viewChat .msg.out.group-mid .bubble { border-top-left-radius: var(--m-bubble-join, 6px); border-bottom-left-radius: var(--m-bubble-join, 6px); }
+    html body[data-design-mode][data-msg-side="one"] #viewChat .msg.out.group-end .bubble { border-top-left-radius: var(--m-bubble-join, 6px); }
 }
 
 /* Заглушка аватара (не последний пузырь группы) держит только ширину колонки.
@@ -23497,10 +23568,11 @@ body .tb-brand.is-update { color: var(--accent-fg); font-weight: 800; }
     html body[data-design-mode] #viewChat .sk-bubble {
         border-radius: var(--m-bubble-r);
     }
-    html body[data-design-mode] #viewChat .msg.in.group-start  .bubble,
-    html body[data-design-mode] #viewChat .msg.in.group-single .bubble { border-bottom-left-radius: var(--m-bubble-join); }
-    html body[data-design-mode] #viewChat .msg.in.group-mid    .bubble,
-    html body[data-design-mode] #viewChat .msg.in.group-end    .bubble { border-top-left-radius: var(--m-bubble-join); border-bottom-left-radius: var(--m-bubble-join); }
+    /* Стык с соседним пузырём — малый радиус; последний пузырь группы (end/single)
+       снизу слева круглый: раньше там был «хвостик» 6 px, и угол то скруглялся, то нет. */
+    html body[data-design-mode] #viewChat .msg.in.group-start  .bubble { border-bottom-left-radius: var(--m-bubble-join); }
+    html body[data-design-mode] #viewChat .msg.in.group-mid    .bubble { border-top-left-radius: var(--m-bubble-join); border-bottom-left-radius: var(--m-bubble-join); }
+    html body[data-design-mode] #viewChat .msg.in.group-end    .bubble { border-top-left-radius: var(--m-bubble-join); }
     html body[data-design-mode] #viewChat .msg.out.group-start  .bubble,
     html body[data-design-mode] #viewChat .msg.out.group-single .bubble { border-bottom-right-radius: var(--m-bubble-join); }
     html body[data-design-mode] #viewChat .msg.out.group-mid    .bubble,
@@ -31132,3 +31204,27 @@ body[data-design-mode="focus"] .raffle-modal {
     text-align: left;
 }
 .download-folder-path bdi { direction: ltr; unicode-bidi: plaintext; }
+
+/* Заблокированный контакт в списке чатов (contact_local.js). */
+.contact-blocked {
+    color: var(--text3);
+    font-style: italic;
+}
+
+/* «Отправляется…» не занимает места в строке. Раньше она стояла в потоке под пузырём
+   невидимой (opacity 0 первые 1,2 с) и поднимала низ строки на ~21 px: аватарка, прижатая
+   к низу строки, оказывалась НИЖЕ пузыря на время отправки и подпрыгивала, когда строка
+   пропадала. Теперь подпись висит под пузырём поверх зазора, высоту строки не меняет.
+   «Нет связи» и «Не отправлено» остаются в потоке: там есть кнопки и они живут дольше. */
+.msg-state.is-pending {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 2px;
+    white-space: nowrap;
+    pointer-events: none;
+}
+body[data-msg-side="one"] .msg.out .msg-state.is-pending {
+    right: auto;
+    left: 0;
+}

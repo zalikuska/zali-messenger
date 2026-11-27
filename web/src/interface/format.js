@@ -136,7 +136,7 @@ ZaliMixin(ZaliInterface, class {
             coin: `<svg ${attrs} fill="none"><circle cx="12" cy="12" r="8.6" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9h5l-5 6h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 12h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
             // Лист галереи (media_sheet.js): первая плитка — камера, «выбрать ещё» — плюс.
             camera: `<svg ${attrs} fill="none"><path d="M4.2 8.6c0-1 .8-1.8 1.8-1.8h1.9l1.4-2h5.4l1.4 2H18c1 0 1.8.8 1.8 1.8v8.6c0 1-.8 1.8-1.8 1.8H6c-1 0-1.8-.8-1.8-1.8V8.6Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12.7" r="3.4" stroke="currentColor" stroke-width="1.8"/></svg>`,
-            // Стикер — лист с загнутым уголком (плитка «Стикер .tgs» в листе галереи).
+            // Стикер — лист с загнутым уголком (плитка «Файл» в листе галереи).
             sticker: `<svg ${attrs} fill="none"><path d="M5 7c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2v6.2L13.2 19H7c-1.1 0-2-.9-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 19v-3.8c0-1.1.9-2 2-2h4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.2 10.2h.01M14.6 10.2h.01M9.4 13.2c.9.8 2.3.9 3.3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
             plus: `<svg ${attrs} fill="none"><path d="M12 5.5v13M5.5 12h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
             // «Восстановить переписку» в меню собеседника: стрелка назад вокруг часов.

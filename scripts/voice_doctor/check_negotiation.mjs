@@ -1203,5 +1203,95 @@ function slowMicPeer(name) {
         mic.stopped === 1 && !api.voice.localStream, `stopped=${mic.stopped} stream=${!!api.voice.localStream}`);
 }
 
+// ---------------------------------------------------------------------------
+// An invite written into a dead socket. On Android/iOS the call signalling socket lives
+// in the WebView and after the app sat in the background it is "open" but dead:
+// sendVoiceEvent reports success, the server never hears of the call, and the caller
+// listened to ringing for a minute while the callee's phone stayed silent.
+// ---------------------------------------------------------------------------
+console.log('\n== an invite lost to a dead socket ==');
+
+async function inviteScenario(label, serverOpts, body) {
+    const clock = new VirtualClock();
+    const server = new SimServer({ ...serverOpts, clock });
+    const alice = new VoicePeer('alice', server, { clock });
+    const bob = new VoicePeer('bob', server, { clock });
+    server.register(alice); server.register(bob);
+    const toasts = [];
+    alice.api.showToast = (toast) => toasts.push(toast);
+    try {
+        await withDeadline(body({ server, alice, bob, toasts }), label);
+    } catch (error) {
+        if (!(error instanceof Deadlocked)) throw error;
+        record(label, false, `DEADLOCKED: ${error.message}`);
+    }
+}
+
+// Each invite the client sends is one row, plus a second row when the server swallowed it.
+const invitesSent = (server, who) => server.log.filter(r => r.from === who && r.type === 'voice_call_invite' && !r.swallowed);
+const invitesLost = (server, who) => server.log.filter(r => r.from === who && r.type === 'voice_call_invite' && r.swallowed);
+
+await inviteScenario('a confirmed invite', {}, async ({ server, alice, bob }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(40000);
+    record('an acknowledged invite is sent exactly once',
+        invitesSent(server, 'alice').length === 1 && bob.api.hasRingingIncomingInvite(),
+        `invites=${invitesSent(server, 'alice').length} ringing=${bob.api.hasRingingIncomingInvite()}`);
+});
+
+await inviteScenario('invite swallowed once', {
+    swallowFromClient: (() => {
+        let swallowed = 0;
+        return (sender, payload) => payload.type === 'voice_call_invite' && swallowed++ < 1;
+    })(),
+}, async ({ server, alice, bob }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(40000);
+    record('an invite that never reached the server is sent again',
+        invitesSent(server, 'alice').length === 2 && invitesLost(server, 'alice').length === 1,
+        `attempts=${invitesSent(server, 'alice').length} lost=${invitesLost(server, 'alice').length}`);
+    record('and the callee phone rings', bob.api.hasRingingIncomingInvite(), `ringing=${bob.api.hasRingingIncomingInvite()}`);
+    record('and the caller is waiting on that call, not on a dead one',
+        alice.api.voice.status === 'calling' && alice.api.voice.outgoingInviteAckedRoomId === alice.api.voice.roomId,
+        `status=${alice.api.voice.status}`);
+    // The callee answers the re-sent invite: the call must come up normally.
+    const accepting = bob.api.acceptIncomingCall();
+    await server.settle();
+    await accepting;
+    record('and the re-sent invite leads to a working call',
+        alice.hasTwoWayAudio('bob') && bob.hasTwoWayAudio('alice'),
+        describe({ a: alice, b: bob, server, deadlocked: '' }));
+});
+
+await inviteScenario('invite never gets through', {
+    swallowFromClient: (sender, payload) => payload.type === 'voice_call_invite',
+}, async ({ server, alice, bob, toasts }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(60000);
+    record('after repeated attempts the caller is told, not left listening to ringing',
+        alice.api.voice.status === 'idle' && toasts.length === 1,
+        `status=${alice.api.voice.status} toasts=${toasts.length}`);
+    record('the attempts are bounded', invitesSent(server, 'alice').length <= 5,
+        `invites=${invitesSent(server, 'alice').length}`);
+    record('and the abandoned call is cancelled on the server',
+        server.log.some(r => r.from === 'alice' && r.type === 'voice_call_cancel'));
+    record('the callee never rang', !bob.api.hasRingingIncomingInvite());
+});
+
+await inviteScenario('invite re-sent after the call was answered', {}, async ({ server, alice, bob }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(2000);
+    const accepting = bob.api.acceptIncomingCall();
+    await server.settle();
+    await accepting;
+    const roomId = alice.api.voice.roomId;
+    // A late duplicate of the invite (the client did not see the ack in time).
+    alice.api.sendOutgoingInvite(roomId, 'bob');
+    await server.settle(5000);
+    record('a repeated invite does not reset a call that was already answered',
+        server.rooms.get(roomId)?.callState === 'active' && alice.hasTwoWayAudio('bob') && bob.hasTwoWayAudio('alice'),
+        `state=${server.rooms.get(roomId)?.callState}`);
+});
+
 console.log(`\n${failures === 0 ? 'OK' : 'FAILURES: ' + failures} (${results.length} checks)\n`);
 process.exit(failures === 0 ? 0 : 1);

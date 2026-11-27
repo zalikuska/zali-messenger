@@ -151,6 +151,11 @@ ZaliMixin(ZaliInterface, class {
         const clear = () => {
             this._voiceDrag = null;
             container.querySelectorAll('.is-dragging, .drop-target').forEach(el => el.classList.remove('is-dragging', 'drop-target'));
+            // Пока тянули, перерисовки списка копились (renderServers) — выполняем одну.
+            if (this._voiceRenderPending) {
+                this._voiceRenderPending = false;
+                this.renderServers?.();
+            }
         };
         const dropTarget = (e) => {
             const drag = this._voiceDrag;
@@ -737,20 +742,21 @@ ZaliMixin(ZaliInterface, class {
 
         const attachBtn = document.getElementById('attachBtn');
         const attachmentInput = document.getElementById('attachmentInput');
+        const anyFileInput = document.getElementById('anyFileInput');
         if (attachBtn && attachmentInput) {
             // Android — своя сетка галереи с камерой первой плиткой (media_sheet.js);
-            // остальные — системный выбор файла.
+            // остальные — системный выбор любого файла.
             attachBtn.addEventListener('click', () => {
                 if (this.nativeSupports('mediaGallery')) this.openMediaSheet();
-                else attachmentInput.click();
+                else (anyFileInput || attachmentInput).click();
             });
             attachmentInput.addEventListener('change', (e) => {
                 this.handleFiles(e.target.files || []);
                 e.target.value = '';
             });
-            // Плитка «Стикер» в листе галереи (media_sheet.js). Не-.tgs, если выбрали
-            // его в файловом менеджере, уходит обычным вложением — как из скрепки.
-            document.getElementById('stickerFileInput')?.addEventListener('change', (e) => {
+            // Скрепка на десктопе и плитка «Файл» в листе галереи (media_sheet.js):
+            // любой файл; .tgs из него handleFiles отправляет как стикер.
+            anyFileInput?.addEventListener('change', (e) => {
                 this.handleFiles(e.target.files || []);
                 e.target.value = '';
             });

@@ -123,6 +123,7 @@
     "interface/game_focus.js",
     "interface/settings_sync.js",
     "interface/confirm_dialog.js",
+    "interface/contact_local.js",
     "interface/rules.js",
     "interface/addons_store.js",
     "interface/addons_runtime.js",

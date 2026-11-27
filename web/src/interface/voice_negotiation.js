@@ -834,6 +834,8 @@ ZaliMixin(ZaliInterface, class {
         this.noteVoiceRoomJoining?.(roomId);
         this.ensureVoicePresenceKeepalive();
         this.renderVoicePanel();
+        // Свой переход виден и в списке каналов: перечитываем состав сразу после захода.
+        this.scheduleServerVoiceRefresh?.(250);
     }
 
     async leaveVoiceRoom({ announce = true, outcome = 'completed', keepMedia = false } = {}) {
@@ -861,6 +863,8 @@ ZaliMixin(ZaliInterface, class {
         // ничего не ждал, но до сброса: тот стирает состав, по которому решается звук.
         this.noteVoiceRoomLeft?.();
         this.resetVoiceState({ keepMedia });
+        // Мы вышли из канала — в боковой панели не должно оставаться нашей строки.
+        this.scheduleServerVoiceRefresh?.(250);
     }
 
     // Tears down whatever voice session is live right now, picking the signal its

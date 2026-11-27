@@ -7,9 +7,9 @@ ZaliMixin(ZaliInterface, class {
     getCurrentMessages() {
         if (this.S.navMode === 'servers') {
             const key = this.currentServerChatKey();
-            return this.S.serverChats[key] || [];
+            return this.withoutBlockedMessages(this.S.serverChats[key] || []);
         }
-        return this.S.chats[this.S.current] || [];
+        return this.withoutBlockedMessages(this.S.chats[this.S.current] || []);
     }
 
     // Fast negative answer to "is this peer present in the persisted cache?".
@@ -497,7 +497,7 @@ ZaliMixin(ZaliInterface, class {
             // равно посчитана (якорь прокрутки ниже читает геометрию), offsetTop строк
             // ничего не пересчитывает.
             const msgNodes = box.querySelectorAll(':scope > .msg');
-            if (msgNodes.length && msgNodes.length === renderedMsgs.length) {
+            const recordHeights = () => {
                 const tail = box.lastElementChild;
                 const lastNode = msgNodes[msgNodes.length - 1];
                 const endTop = tail && tail !== lastNode && tail.classList.contains('msg-window-spacer')
@@ -513,6 +513,18 @@ ZaliMixin(ZaliInterface, class {
                     partial ? msgNodes[msgNodes.length - 1].offsetTop : endTop);
                 const store = this.messageHeightStore(conversationKey);
                 this.messageWindow.avgHeight = this.messageHeightAverage(store, Number(this.messageWindow?.avgHeight || 92));
+            };
+            if (msgNodes.length && msgNodes.length === renderedMsgs.length) {
+                // Открытие переписки внизу: верхние строки окна на первом кадре не раскладываются
+                // (content-visibility: hidden) и достраиваются по кадрам — раскладка 140 пузырей
+                // одним куском была самым длинным кадром при смене чата (Chromium ×6: 17 мс на
+                // раскладку против ~4). Высоты строк записываются, когда все они настоящие:
+                // у отложенных offsetTop — это оценка, а не высота.
+                const deferState = conversationChanged && !restore && this.pendingMessagesScroll !== 'top'
+                    ? this.deferOffscreenMessageRows(box, msgNodes, windowInfo, conversationKey)
+                    : null;
+                if (deferState) deferState.onDone = recordHeights;
+                else recordHeights();
             }
         }
         this.messageWindow.conversationKey = conversationKey;
@@ -633,8 +645,8 @@ ZaliMixin(ZaliInterface, class {
         this.resetMessageWindow();
 
         const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-        set('tbChat',       peer);
-        set('chatHdrName',  peer);
+        set('tbChat',       this.contactDisplayName(peer));
+        set('chatHdrName',  this.contactDisplayName(peer));
         this.updateChatHeaderCryptoKey({ peer });
         const chatHdrAva = document.getElementById('chatHdrAva');
         if (chatHdrAva) {

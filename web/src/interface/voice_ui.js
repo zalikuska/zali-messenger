@@ -101,16 +101,44 @@ ZaliMixin(ZaliInterface, class {
         }
         const live = this._serverVoicePresence?.[server.id]?.[channel.id];
         if (!live) return { names: [], joinedAt: {}, states: {} };
-        return live;
+        // Снимок состава приходит с сервера с опозданием, а наша комната живая. Всё, что
+        // живая комната говорит о людях, главнее снимка: кто сидит в нашем канале, не может
+        // одновременно стоять в этом, и мы сами — тоже (иначе после своего перехода в старом
+        // канале оставалась «копия» до следующего опроса).
+        const inChannelCall = this.voiceLiveCallType?.() === 'channel' && String(this.voice.serverId || '') === String(server.id);
+        if (!inChannelCall) return live;
+        const here = new Set((Array.isArray(this.voice.participants) ? this.voice.participants : [])
+            .map(name => String(name || '').trim().toLowerCase()));
+        const me = String(this.myName?.() || '').trim().toLowerCase();
+        if (me) here.add(me);
+        const names = live.names.filter(name => !here.has(String(name).toLowerCase()));
+        if (names.length === live.names.length) return live;
+        return { ...live, names };
+    }
+
+    // Перечитать состав каналов скоро: серия событий (вышел → зашёл) схлопывается в один
+    // запрос. Зовётся по пушу сервера (server_voice_changed) и после своего входа/выхода.
+    scheduleServerVoiceRefresh(delay = 120) {
+        clearTimeout(this._serverVoiceRefreshTimer);
+        this._serverVoiceRefreshTimer = setTimeout(() => {
+            this._serverVoiceRefreshTimer = null;
+            if (this.S.navMode !== 'servers') return;
+            void this.refreshServerVoicePresence();
+        }, delay);
     }
 
     async refreshServerVoicePresence() {
         const server = this.currentServer?.();
         if (!server?.id) return;
+        // Ответы приходят не по порядку (опрос, пуш и свой вход шлют запросы почти
+        // одновременно): применяется только ответ на самый поздний запрос, иначе устаревший
+        // снимок возвращал в список людей, которые уже перешли.
+        const seq = (this._serverVoiceSeq = (this._serverVoiceSeq || 0) + 1);
         try {
             const res = await this.apiFetch(`/api/servers/${encodeURIComponent(server.id)}/voice`);
             if (!res.ok) return;
             const data = await res.json();
+            if (seq !== this._serverVoiceSeq) return;
             const channels = {};
             for (const [cid, raw] of Object.entries(data.channels || {})) {
                 const joinedAt = this.parseVoiceJoinedAt(raw.joinedAt);

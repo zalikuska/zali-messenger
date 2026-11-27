@@ -242,8 +242,8 @@ object ZaliCoreBridge {
             timestamp = data.optLong("timestamp"),
             keyVersion = if (data.has("keyVersion")) data.optInt("keyVersion") else null,
             attachments = attachments,
-            call = data.optString("call", "").ifEmpty { null },
-            reply = data.optString("reply", "").ifEmpty { null },
+            call = data.optStringOrNull("call"),
+            reply = data.optStringOrNull("reply"),
         )
     }
 

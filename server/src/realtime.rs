@@ -166,6 +166,41 @@ pub(crate) async fn broadcast_server_structure(state: &Arc<AppState>, server_id:
     }
 }
 
+/// Состав голосовых каналов сервера изменился (вошёл, вышел, перешёл, включил камеру):
+/// всем участникам сервера, кто сейчас онлайн, уходит `server_voice_changed`. Комнатные
+/// `voice_room_state` получают только сидящие в комнате, а список «кто в канале» в боковой
+/// панели у остальных раньше обновлялся опросом раз в 5 с — отсюда задержка перехода и
+/// «призрак» в старом канале. Тело без данных: клиент перечитывает свой срез обычным GET
+/// (права на просмотр канала зависят от роли).
+pub(crate) async fn broadcast_server_voice_changed(state: &Arc<AppState>, server_id: &str) {
+    let members: Vec<String> = match sqlx::query_scalar(
+        "SELECT username FROM server_members WHERE server_id = ?
+         UNION
+         SELECT owner FROM servers WHERE id = ?",
+    )
+    .bind(server_id)
+    .bind(server_id)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(members) => members,
+        Err(e) => {
+            warn!("Не удалось прочитать участников сервера {} для события голоса: {}", server_id, e);
+            return;
+        }
+    };
+    let payload = serde_json::json!({
+        "type": "server_voice_changed",
+        "serverId": server_id,
+    })
+    .to_string();
+    for name in members {
+        if state.user_connections.contains_key(&name) {
+            send_payload_to_user(state, &name, payload.clone(), "server_voice").await;
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct PublishAnnouncementRequest {
     text: String,

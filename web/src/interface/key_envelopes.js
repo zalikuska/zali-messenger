@@ -372,8 +372,25 @@ ZaliMixin(ZaliInterface, class {
     async _retryPublishConversationKeysImpl({ reason = 'auto', limit = 200 } = {}) {
         if (!this.S.session?.token) return 0;
         const stored = this.loadStoredConversationKeys();
+        // Server-scope: the server answers 403 for a scope whose server we are no longer
+        // a member of (left / deleted — `server:dev-team:*` in prod) and for the junk
+        // `server:null:null` that Android's `optString` used to mint from a JSON null
+        // (see JsonExt.kt). Both stay in the stored/vault key map forever, so every
+        // login re-POSTed them (~200 rejected envelopes in one day). Skip them; the
+        // membership filter only applies once the server list has actually loaded.
+        const knownServers = Array.isArray(this.S.servers) && this.S.servers.length
+            ? new Set(this.S.servers.map(server => String(server?.id || '')))
+            : null;
+        const sweepable = (scope) => {
+            if (!String(scope || '').startsWith('server:')) return true;
+            const channel = this.channelFromConversationScope(scope);
+            if (!channel) return true;
+            if (channel.serverId === 'null' || channel.serverId === 'undefined') return false;
+            return !knownServers || knownServers.has(channel.serverId);
+        };
         const scopes = Object.keys(stored)
             .filter(scope => (String(scope || '').startsWith('dm:') || String(scope || '').startsWith('server:'))
+                && sweepable(scope)
                 && String(stored[scope] || '').trim())
             .slice(0, Math.max(1, Number(limit) || 20));
         // ACTIVE key per scope only. This sweep briefly published every `alt:`

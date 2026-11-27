@@ -566,6 +566,11 @@ ZaliMixin(ZaliInterface, class {
         if (eventType === 'voice_call_invite') {
             const from = String(payload.from || '').trim();
             const roomId = String(payload.roomId || '').trim();
+            if (from && this.isUserBlocked(from)) {
+                this.voiceDiag('incoming-invite-blocked', { roomId, from }, 'WARN');
+                this.sendVoiceEvent({ type: 'voice_call_reject', roomId, target: from });
+                return;
+            }
             // Busy guard: an invite used to overwrite voice state unconditionally —
             // an incoming call from a third user mid-call clobbered callTrack /
             // incomingInvite and flipped the UI to "входящий звонок", killing the
@@ -668,6 +673,9 @@ ZaliMixin(ZaliInterface, class {
                 roomId: String(payload.roomId || '').trim(),
                 target: String(payload.target || '').trim(),
             };
+            // Подтверждение приглашения: сервер его получил и позвонил адресату
+            // (watchOutgoingInvite в voice_call.js перестаёт его пересылать).
+            this.voice.outgoingInviteAckedRoomId = this.voice.outgoingInvite.roomId;
             this.voice.targetUser = String(payload.target || '').trim();
             this.voice.status = 'calling';
             this.voiceTrace('outgoing-ring', { roomId: this.voice.outgoingInvite.roomId, target: this.voice.targetUser });

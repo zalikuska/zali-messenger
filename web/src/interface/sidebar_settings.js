@@ -96,6 +96,10 @@ ZaliMixin(ZaliInterface, class {
      * предки.
      */
     revealActiveSettingsCategory() {
+        // Полоса есть только на телефоне; на компьютере она скрыта, а чтение clientWidth
+        // у скрытого элемента — всё равно принудительная раскладка при каждом открытии
+        // настроек (Chromium ×6: ~6 мс).
+        if (!this.isMobileLayout()) return;
         const bar = document.getElementById('settingsCats');
         const btn = bar?.querySelector('.settings-cat.is-active');
         if (!bar || !btn || !bar.clientWidth) return;

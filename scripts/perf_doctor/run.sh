@@ -26,6 +26,7 @@ run "цена сохранения кэша"  node scripts/perf_doctor/check_per
 run "горячие пути"          node scripts/perf_doctor/check_hot_paths.mjs
 run "точечное обновление"   node scripts/perf_doctor/check_incremental_render.mjs
 run "политика кеша"         node scripts/perf_doctor/check_cache_policy.mjs
+run "анимации звонка"       node scripts/perf_doctor/check_compositor_animations.mjs
 
 echo ""
 if [ "$FAILED" = "0" ]; then echo "perf-doctor: all checks passed"; else echo "perf-doctor: FAILURES"; fi

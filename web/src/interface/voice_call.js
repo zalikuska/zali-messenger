@@ -94,12 +94,9 @@ ZaliMixin(ZaliInterface, class {
             this.voice.participants = [me, target].filter(Boolean);
             this.voice.status = 'calling';
             this.voice.negotiationRetries = 0;
-            this.sendVoiceEvent({
-                type: 'voice_call_invite',
-                roomId,
-                roomType: 'dm',
-                target,
-            });
+            this.voice.outgoingInviteAckedRoomId = '';
+            this.sendOutgoingInvite(roomId, target);
+            void this.watchOutgoingInvite(roomId, target);
             this.renderVoicePanel();
             try {
                 await this.ensureVoiceLocalStream();
@@ -115,6 +112,67 @@ ZaliMixin(ZaliInterface, class {
             this.voice.callSetupInFlight = false;
             this.voice.callSetupStartedAt = 0;
         }
+    }
+
+    sendOutgoingInvite(roomId, target) {
+        return this.sendVoiceEvent({
+            type: 'voice_call_invite',
+            roomId,
+            roomType: 'dm',
+            target,
+        });
+    }
+
+    // Приглашение ждёт подтверждения сервера: `voice_call_outgoing` приходит звонящему сразу
+    // после того, как сервер завёл комнату и позвонил адресату.
+    isOutgoingInvitePending(roomId) {
+        return String(this.voice.outgoingInvite?.roomId || '') === roomId
+            && String(this.voice.status || '') === 'calling'
+            && String(this.voice.outgoingInviteAckedRoomId || '') !== roomId;
+    }
+
+    // Приглашение — единственное, что заставляет звонить телефон собеседника, и ушло оно
+    // по сокету, о смерти которого клиент мог не знать (ensureVoiceSocketAlive). Раньше
+    // `sendVoiceEvent` звали вслепую: «отправлено» — и звонящий слушал гудки целую минуту
+    // до «пропущенного», хотя сервер о звонке не слышал вовсе. Особенно часто так бывало
+    // у пары Android — Android: сокет в WebView после фона мёртв у обоих.
+    //
+    // Нет подтверждения — проверяем сокет, при необходимости открываем заново и шлём ещё
+    // раз; сервер повтор принимает (voice.rs: звонок, уже принятый, не сбрасывается).
+    // Совсем не вышло — честно отменяем, а не звоним в пустоту.
+    async watchOutgoingInvite(roomId, target) {
+        if (this.nativeSupports('voice')) return;
+        const windows = [3000, 5000, 8000];
+        for (let attempt = 1; attempt <= windows.length; attempt += 1) {
+            const settled = await this.waitVoiceCondition(() => !this.isOutgoingInvitePending(roomId), windows[attempt - 1]);
+            if (settled) return;
+            const readyState = this.voice.socket ? this.voice.socket.readyState : 'no-socket';
+            this.voiceDiag('invite-unacked', { roomId, target, attempt, readyState }, 'WARN');
+            const alive = await this.ensureVoiceSocketAlive({ reason: 'invite-unacked' });
+            if (!this.isOutgoingInvitePending(roomId)) return;
+            if (alive) this.sendOutgoingInvite(roomId, target);
+        }
+        if (await this.waitVoiceCondition(() => !this.isOutgoingInvitePending(roomId), 5000)) return;
+        this.voiceDiag('invite-failed', { roomId, target }, 'ERROR');
+        this.sendVoiceEvent({ type: 'voice_call_cancel', roomId, target });
+        this.abandonVoiceRoom(roomId);
+        this.recordVoiceCallHistory({ outcome: 'failed', endedAt: Date.now() });
+        this.resetVoiceState({ preserveInvite: false });
+        this.showToast?.({
+            title: 'Не удалось дозвониться',
+            text: 'Нет связи с сервером. Проверьте интернет и позвоните ещё раз.',
+            tone: 'error',
+        });
+    }
+
+    // Сокет открылся заново, а приглашение так и не подтверждено — отправить его сейчас, не
+    // дожидаясь очередного окна watchOutgoingInvite.
+    resendUnackedOutgoingInvite(reason = '') {
+        const invite = this.voice.outgoingInvite;
+        const roomId = String(invite?.roomId || '').trim();
+        if (!roomId || !this.isOutgoingInvitePending(roomId)) return;
+        this.voiceDiag('invite-resent', { roomId, target: invite.target || '', reason }, 'WARN');
+        this.sendOutgoingInvite(roomId, String(invite.target || '').trim());
     }
 
     // The re-entrancy latch that guards call setup is released in a `finally`, so any
@@ -219,6 +277,13 @@ ZaliMixin(ZaliInterface, class {
             ts: new Date().toLocaleTimeString(),
         });
         this.renderVoicePanel();
+        // Ответ из уведомления может прийти раньше, чем сокет вебвью переподключится: без
+        // открытого сокета `sendVoiceEvent` молча отбрасывает «принять», и звонящий
+        // продолжает слушать гудки, пока у принявшего уже «Подключение…».
+        if (!this.nativeSupports('voice') && typeof WebSocket !== 'undefined'
+            && !(this.voice.socket && this.voice.socket.readyState === WebSocket.OPEN)) {
+            await this.ensureVoiceSocketAlive({ reason: 'accept' });
+        }
         this.sendVoiceEvent({
             type: 'voice_call_accept',
             roomId: invite.roomId,
@@ -399,7 +464,12 @@ ZaliMixin(ZaliInterface, class {
         if (caller && caller !== this.myName()) this.switchChat?.(caller);
         if (action !== 'accept' && action !== 'decline') return;
         this.voiceDiag('notification-action', { action, roomId: room });
-        const deadline = Date.now() + 20000;
+        // Телефон лежал в кармане: сокет вебвью мог умереть, а звонок в приложение приедет
+        // только снимком комнаты после нового подключения. Не ждать тика сторожа (до 40 с).
+        this.kickBrowserVoiceSocket?.('call-notification');
+        // Звонок живёт на сервере 60 с, а холодный запуск вебвью + вход + сокет на медленном
+        // телефоне не укладывались в прежние 20 с — «Принять» молча ничего не делало.
+        const deadline = Date.now() + 45000;
         while (Date.now() < deadline) {
             const invite = this.voice.incomingInvite;
             if (invite?.roomId && (!room || invite.roomId === room) && this.hasRingingIncomingInvite()) {

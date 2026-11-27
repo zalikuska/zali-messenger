@@ -90,6 +90,12 @@ ZaliMixin(ZaliInterface, class {
         // измениться (media_sheet.js).
         if (this.isAppAttended()) this.refreshMediaSheet?.();
         this.reportClientPresence?.();
+        // Вернулись в приложение — сокет сигналинга звонков в вебвью мог умереть, пока оно
+        // было в фоне. `visibilitychange` на Android не приходит (WebView без onPause
+        // «видим» всегда), так что без этого мёртвый сокет находил только сторож через
+        // 25–40 с, а звонок, пришедший в это окно, терялся: сервер не шлёт пуш на
+        // устройство, которое смотрит в приложение (push.rs::push_suppressed_for).
+        if (this.isAppAttended()) this.kickBrowserVoiceSocket?.('native-focus');
         // Открытый чат перед глазами глушит уведомления на всех устройствах
         // (device_activity.js) — ушедшее с экрана окно обязано снять это сразу.
         this.reportConversationView?.();
@@ -100,12 +106,22 @@ ZaliMixin(ZaliInterface, class {
 
     // Входящее не требует уведомления, только если его чат на экране И пользователь
     // на экран смотрит. Отрисовку этим не гейтить — она обязана идти и в фоне.
+    //
+    // Телефон: выбранный чат остаётся «текущим» и тогда, когда на экране СПИСОК чатов, а сам чат
+    // целиком за краем (isMobileChatOffscreen). Для вёрстки он «виден» (isDmChatVisible), но
+    // человек его не читает: раньше сообщение в последний открытый чат не давало ни счётчика, ни
+    // уведомления, сдвигало отметку «прочитано» и сообщало серверу `client_view` — а тот глушил пуши
+    // о нём на всех устройствах. Со стороны списка всё выглядело как «все сообщения уже прочитаны».
+    isConversationOnScreen() {
+        return !this.isMobileChatOffscreen?.();
+    }
+
     isServerChatAttended(key) {
-        return this.isServerChatVisible(key) && this.isAppAttended();
+        return this.isServerChatVisible(key) && this.isAppAttended() && this.isConversationOnScreen();
     }
 
     isDmChatAttended(peer) {
-        return this.isDmChatVisible(peer) && this.isAppAttended();
+        return this.isDmChatVisible(peer) && this.isAppAttended() && this.isConversationOnScreen();
     }
 
     // Пара к isAppAttended. Сообщение, пришедшее в открытый чат, пока окно было в
@@ -113,7 +129,7 @@ ZaliMixin(ZaliInterface, class {
     // этот чат снова у него перед глазами — счётчик снимается так же, как его
     // снимают switchChat / setActiveChannel / setNavMode при выборе чата.
     clearAttendedConversationUnread() {
-        if (!this.isAppAttended()) return;
+        if (!this.isAppAttended() || !this.isConversationOnScreen()) return;
         if (this.S.navMode === 'servers') {
             const attendedKey = this.currentServerChatKey();
             if (attendedKey && this.isServerChatVisible(attendedKey)) this.markConversationRead(true, attendedKey);
@@ -394,7 +410,15 @@ ZaliMixin(ZaliInterface, class {
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
                 ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>`;
-        menu.innerHTML = `${profileItems}${pinItem}${recoveryItem}${muteItem}
+        const blocked = this.isUserBlocked(name);
+        const localItems = isSelf ? '' : `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="nickname">
+                ${this.uiIcon('user')}<span>${this.localNickname(name) ? 'Изменить имя для себя' : 'Имя только для меня'}</span>
+            </button>
+            <button type="button" class="peer-context-menu-item${blocked ? '' : ' is-danger'}" role="menuitem" data-action="block">
+                ${this.uiIcon(blocked ? 'user-plus' : 'bell-off')}<span>${blocked ? 'Разблокировать' : 'Заблокировать'}</span>
+            </button>`;
+        menu.innerHTML = `${profileItems}${pinItem}${recoveryItem}${muteItem}${localItems}
             ${(fromVoice && isSelf) ? '' : `<div class="peer-context-menu-volume">
                 <div class="peer-context-menu-volume-head"><span>Громкость</span><strong id="contactVolumeValue">${percent}%</strong></div>
                 <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
@@ -454,6 +478,14 @@ ZaliMixin(ZaliInterface, class {
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);
             this.closeContactContextMenu();
+        });
+        menu.querySelector('[data-action="nickname"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            this.promptLocalNickname(name);
+        });
+        menu.querySelector('[data-action="block"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            void this.toggleBlockUser(name);
         });
         menu.querySelector('[data-action="recover-history"]')?.addEventListener('click', () => {
             this.closeContactContextMenu();
@@ -819,6 +851,8 @@ ZaliMixin(ZaliInterface, class {
         // Без учёта регистра: логин в сообщении и в сессии пишут по-разному (Android хранит
         // последнего вошедшего в нижнем регистре), и своё сообщение считалось чужим.
         if (!from || from.toLowerCase() === String(this.myName() || '').trim().toLowerCase()) return;
+        // Заблокированный: ни счётчика, ни тоста, ни звука.
+        if (this.isUserBlocked(from)) return;
         // Карточка ZaliCoin — в уведомлении по-человечески, без служебного id.
         text = this.coinCardSummary(text) || text;
         const isChannel = !!(serverId && channelId);

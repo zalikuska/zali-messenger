@@ -102,8 +102,8 @@ description: Android-шелл (apps/android/) — NativeBridge.kt/ZaliCoreBridge
   галерею. Камера: при объявленном и не выданном `CAMERA` `ACTION_IMAGE_CAPTURE`
   падает `SecurityException` — сначала разрешение. Остальные поля с `image/*` /
   `video/*` открывают системный Photo Picker (`photoPickerMediaType`), прочие —
-  `ACTION_GET_CONTENT`. Стикеры `.tgs` пикер не показывает — для них плитка
-  «Стикер .tgs» и поле `#stickerFileInput` без картинок в `accept`. В KDoc не писать `image/*` буквально: Kotlin открывает
+  `ACTION_GET_CONTENT`. Документы и стикеры `.tgs` пикер не показывает — для них плитка
+  «Файл» и поле `#anyFileInput` без `accept`. В KDoc не писать `image/*` буквально: Kotlin открывает
   вложенный комментарий, и файл перестаёт компилироваться.
 - **Фоновая доставка — FCM** (`PushMessagingService.kt`,
   `server/src/fcm.rs`). Пуш — data-сообщение без текста; сервис сам скачивает

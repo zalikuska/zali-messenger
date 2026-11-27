@@ -263,6 +263,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     private fun kickConnections(reason: String) {
         if (wsAuthToken.isEmpty()) return
         android.util.Log.i("ZaliNative", "kick connections reason=$reason")
+        // Сокет звонков — в вебвью, а не этот (см. kickBrowserVoiceSocketJs): его event
+        // `online` в WebView приходит не всегда и не сразу.
+        kickBrowserVoiceSocketJs(reason)
         // Простаивающие соединения старой сети мертвы: следующий запрос иначе ушёл бы
         // в одно из них и сжёг на нём первую попытку (attemptApiRequest).
         httpClient.connectionPool.evictAll()
@@ -442,9 +445,45 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         ""
     }
 
+    /**
+     * Одна очередь на весь мост. `@JavascriptInterface` Android вызывает СИНХРОННО: пока метод
+     * не вернулся, главный поток рендерера WebView стоит. Живой замер на телефоне (трасса
+     * DevTools, 2026-11-27): таймер `reportConversationView` — «сравнить строку» — висел
+     * 200 мс при каждом открытии чата, а EvaluateScript с мостом внутри — до 200 мс, и в
+     * обоих случаях в рендерере ни одного события: он ждал нас. Причина — работа, которую
+     * обработчики делали прямо на этом потоке: `NotificationManager.activeNotifications`
+     * (binder в system_server со всеми уведомлениями и их bitmap) на каждое открытие чата
+     * (CLEAR_NOTIFICATIONS), запись файла ключей (SET_KEY) на каждую смену чата,
+     * `connectWebSocket`/`PushSession.update` на первом API-запросе, `JSONObject` разбор
+     * больших кадров. Кадр теперь только принимается, всё остальное — на этом потоке.
+     *
+     * Один поток, а не пул: порядок сообщений моста значим (NETWORK_CONFIG и SET_KEY должны
+     * лечь раньше следующего SEND_MESSAGE/API_REQUEST). Долгое внутри обработчиков и так
+     * вынесено в свои очереди (crypto, stage, addon, gallery) или в OkHttp enqueue.
+     */
+    private val bridgeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "zali-bridge").apply { isDaemon = true }
+    }
+
     /** Entry point for every `postNativeMessage(...)` call from `Web/src/interface.js`. */
     @JavascriptInterface
     fun postMessage(json: String) {
+        try {
+            bridgeExecutor.execute {
+                // Необработанное исключение на потоке очереди уронило бы процесс; раньше оно
+                // уходило в JS как «Java exception was raised».
+                try {
+                    dispatchMessage(json)
+                } catch (e: Throwable) {
+                    android.util.Log.w("NativeBridge", "bridge message failed: ${e.message}", e)
+                }
+            }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // Процесс гасится — принимать уже некому.
+        }
+    }
+
+    private fun dispatchMessage(json: String) {
         val dict = try { JSONObject(json) } catch (e: Exception) { return }
         // Только наш верхний фрейм — см. [bridgeNonce].
         if (!bridgeNonceMatches(dict.optString("bridgeNonce", ""))) return
@@ -562,8 +601,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 sender = dict.optString("sender", "").trim(),
                 text = dict.optString("text", ""),
                 attachmentCount = dict.optInt("attachmentCount", 0),
-                serverId = dict.optString("serverId", "").ifEmpty { null },
-                channelId = dict.optString("channelId", "").ifEmpty { null },
+                serverId = dict.optStringOrNull("serverId"),
+                channelId = dict.optStringOrNull("channelId"),
                 messageId = dict.optString("messageId", "").trim(),
                 silent = dict.optBoolean("silent", false),
                 alertAgain = dict.optBoolean("force", false),
@@ -910,14 +949,14 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val sender = dict.optString("sender", "")
         val key = dict.optString("key", "").trim()
         val keyVersion = if (dict.has("keyVersion")) dict.optInt("keyVersion", 2) else 2
-        val serverId = dict.optString("serverId", "").ifEmpty { null }
-        val channelId = dict.optString("channelId", "").ifEmpty { null }
+        val serverId = dict.optStringOrNull("serverId")
+        val channelId = dict.optStringOrNull("channelId")
         // Цитата ответа и запись о звонке — непрозрачные JSON-строки, которые ядро
         // шифрует тем же ключом, что и текст. До 0.2b33 их здесь просто не читали,
         // и ответ, отправленный с телефона, приезжал собеседнику без цитаты —
         // безвозвратно, потому что восстанавливать её неоткуда.
-        val callPayload = dict.optString("call", "").trim().ifEmpty { null }
-        val replyPayload = dict.optString("reply", "").trim().ifEmpty { null }
+        val callPayload = dict.optStringOrNull("call", trim = true)
+        val replyPayload = dict.optStringOrNull("reply", trim = true)
 
         if (key.isEmpty()) {
             inFlightSendClientIds.remove(clientId)
@@ -1075,8 +1114,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val text = dict.optString("text", "")
         val key = dict.optString("key", "").trim()
         val keyVersion = if (dict.has("keyVersion")) dict.optInt("keyVersion", 2) else 2
-        val callPayload = dict.optString("call", "").trim().ifEmpty { null }
-        val replyPayload = dict.optString("reply", "").trim().ifEmpty { null }
+        val callPayload = dict.optStringOrNull("call", trim = true)
+        val replyPayload = dict.optStringOrNull("reply", trim = true)
 
         if (messageId.isEmpty() || key.isEmpty()) {
             sendNativeResponse(requestId, ok = false,
@@ -1369,8 +1408,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         if (wsAuthToken.isEmpty()) return fail("Нужно войти в аккаунт")
         val sender = dict.optString("sender", "").trim()
         val receiver = dict.optString("receiver", "").trim()
-        val serverId = dict.optString("serverId", "").trim().ifEmpty { null }
-        val channelId = dict.optString("channelId", "").trim().ifEmpty { null }
+        val serverId = dict.optStringOrNull("serverId", trim = true)
+        val channelId = dict.optStringOrNull("channelId", trim = true)
         val archivePath = dict.optString("archivePath", "").trim()
         val wantedName = dict.optString("name", "").trim()
         val wantedSize = dict.optLong("size", -1)
@@ -2295,8 +2334,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 val sender = if (raw.has("sender")) raw.optString("sender") else null
                 val receiver = if (raw.has("receiver")) raw.optString("receiver") else null
                 if (id.isNotEmpty() && sender != null && receiver != null) {
-                    val serverId = raw.optString("serverId", raw.optString("server_id", "")).ifEmpty { null }
-                    val channelId = raw.optString("channelId", raw.optString("channel_id", "")).ifEmpty { null }
+                    val serverId = (raw.optStringOrNull("serverId") ?: raw.optStringOrNull("server_id"))
+                    val channelId = (raw.optStringOrNull("channelId") ?: raw.optStringOrNull("channel_id"))
                     // Маленький архив сервер кладёт прямо в кадр (server/src/messages.rs,
                     // `inlineArchive`) — тогда отдельного GET /api/download/:id не нужно.
                     // Это круг до сервера на каждое входящее сообщение, а на мобильной
@@ -3158,12 +3197,53 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
               var ui = window.__ZALI_INTERFACE;
               if (ui && ui.S && ui.S.session && ui.S.session.token && ui.handleCallNotificationAction) {
                 ui.handleCallNotificationAction($payload);
-              } else if (attempt < 80) {
+              } else if (attempt < 180) {
                 setTimeout(function () { act(attempt + 1); }, 250);
               }
             })(0);
         """.trimIndent()
         mainHandler.post { webView.evaluateJavascript(js, null) }
+    }
+
+    /**
+     * Сигналинг звонков на Android идёт по сокету ВЕБВЬЮ (`voice: false`), а не по нативному
+     * OkHttp-сокету: нативный сокет `voice_*` отбрасывает (handleWsFrame). Поэтому живость
+     * нативного сокета ничего не говорит о том, дойдёт ли до страницы звонок, а в фоне сокет
+     * вебвью умирает молча. Пинок заставляет страницу проверить свой сокет прямо сейчас
+     * (kickBrowserVoiceSocket в voice_transport.js): жив — остаётся, нет — переподключение.
+     * Главный поток.
+     */
+    private fun kickBrowserVoiceSocketJs(reason: String) {
+        val js = "var ui = window.__ZALI_INTERFACE; " +
+            "if (ui && ui.kickBrowserVoiceSocket) ui.kickBrowserVoiceSocket(${JSONObject.quote(reason)});"
+        webView.evaluateJavascript(js, null)
+    }
+
+    /**
+     * Пуш о звонке пришёл, пока приложение на экране. Раньше его просто отбрасывали
+     * («приложение звонит само, по сокету»), но сокет вебвью мог быть мёртв — тогда звонок
+     * пропадал совсем: страница о нём не знала, пуш не показан.
+     *
+     * Теперь страницу пинают (после переподключения звонок приезжает снимком комнаты), а
+     * через несколько секунд проверяют, звонит ли она: нет — показываем уведомление-звонок.
+     * Звонит, ответила или звонок уже кончился — не делаем ничего.
+     */
+    fun ensureIncomingCallRings(roomId: String, from: String, declineToken: String) {
+        mainHandler.post {
+            kickBrowserVoiceSocketJs("call push")
+            mainHandler.postDelayed({
+                if (CallNotifier.wasEnded(roomId)) return@postDelayed
+                val room = JSONObject.quote(roomId)
+                val js = "(function(){ var ui = window.__ZALI_INTERFACE; var v = ui && ui.voice; " +
+                    "return !!(v && ((v.incomingInvite && v.incomingInvite.roomId === $room) || v.roomId === $room)); })();"
+                webView.evaluateJavascript(js) { result ->
+                    if (result == "true" || CallNotifier.wasEnded(roomId)) return@evaluateJavascript
+                    if (!MessageNotifier.canNotify(context)) return@evaluateJavascript
+                    android.util.Log.i("ZaliNative", "incoming call $roomId not rung by the page; showing the notification")
+                    CallNotifier.showIncoming(context, roomId, from, declineToken)
+                }
+            }, INCOMING_CALL_PAGE_GRACE_MS)
+        }
     }
 
     fun openConversationFromNotification(sender: String?, serverId: String?, channelId: String?) {
@@ -3210,6 +3290,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         private const val WS_KICK_PROBE_TIMEOUT_MS = 5_000L
         /** Сколько сокет должен прожить, чтобы бэкофф реконнекта сбросился. */
         private const val WS_STABLE_AFTER_MS = 15_000L
+
+        /** Сколько ждать, пока страница сама зазвонит, прежде чем показать звонок из пуша (ensureIncomingCallRings). */
+        private const val INCOMING_CALL_PAGE_GRACE_MS = 3_000L
 
         /** Пока человек активен, `client_idle` уходит не чаще (noteUserActivity). */
         private const val DEVICE_IDLE_REPORT_MS = 30_000L

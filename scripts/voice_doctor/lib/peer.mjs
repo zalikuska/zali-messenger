@@ -104,6 +104,10 @@ export class VoicePeer {
         api.detachLocalVideoPreview = () => {};
         api.detachLocalScreenPreview = () => {};
         api.attachLocalScreenTrackToPeer = () => {};
+        // The socket is the simulated server here, so there is nothing to probe or
+        // reopen; the loss a real socket suffers is modelled by the sim server instead
+        // (dropFilter / refuseSend).
+        api.ensureVoiceSocketAlive = async () => true;
 
         // The mic itself is faked; ensureVoiceLocalStream (dedupe, micError,
         // renegotiation on late tracks) stays real.

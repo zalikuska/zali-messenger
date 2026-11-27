@@ -54,8 +54,22 @@ export class SimServer {
         const type = payload.type;
         this.log.push({ from: sender, type, to: payload.to || '', roomId: payload.roomId || '', signalType: payload.signal?.type || '' });
         if (this.opts.refuseSend) return false;
+        // A frame written into a socket that is already dead: the client is told it
+        // went out (readyState was still OPEN), and the server never sees it. This is
+        // how an invite vanishes on a phone that was in the background.
+        if (this.opts.swallowFromClient && this.opts.swallowFromClient(sender, payload)) {
+            this.log.push({ from: sender, type, swallowed: true });
+            return true;
+        }
 
         if (type === 'voice_call_invite') {
+            // An invite for a call that was already answered must not reset it (voice.rs).
+            const existing = this.rooms.get(String(payload.roomId || '').trim());
+            if (existing && existing.callState === 'active'
+                && existing.participants.has(sender) && existing.participants.has(String(payload.target || '').trim())) {
+                this.log.push({ from: sender, type, ignoredRepeat: true });
+                return true;
+            }
             const target = String(payload.target || '').trim();
             const roomId = String(payload.roomId || '').trim();
             const room = this._room(roomId);
