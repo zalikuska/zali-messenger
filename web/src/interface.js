@@ -497,7 +497,7 @@ class ZaliInterface {
 
         // Register UI update commands on the bus
         const E = window.ZaliBusEvents || {};
-        this.bus.registerCommand('zali_interface', E.RECEIVE_MESSAGE || 'receive_message', (data) => this.receiveMessage(data));
+        this.bus.registerCommand('zali_interface', E.RECEIVE_MESSAGE || 'receive_message', (data) => { this.noteNativeFrame(); return this.receiveMessage(data); });
         this.bus.registerCommand('zali_interface', E.SET_USERS || 'set_users', (users) => this.setUsers(users));
         this.bus.registerCommand('zali_interface', E.SET_CONTACTS || 'set_contacts', (contacts) => this.setContacts(contacts));
         this.bus.registerCommand('zali_interface', E.SET_SESSION || 'set_session', (session) => this.setSession(session));
@@ -524,7 +524,11 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.MESSAGE_DELETED || 'message_deleted', (data) => this.onMessageDeleted(data));
         this.bus.registerCommand('zali_interface', E.MESSAGE_EDITED || 'message_edited', (data) => this.onMessageEdited(data));
         this.bus.registerCommand('zali_interface', E.AVATAR_UPDATED || 'avatar_updated', (data) => this.handleAvatarUpdated(data));
-        this.bus.registerCommand('zali_interface', E.REALTIME_EVENT || 'realtime_event', (data) => this.dispatchRealtimeEvent(data));
+        this.bus.registerCommand('zali_interface', E.REALTIME_EVENT || 'realtime_event', (data) => {
+            // `native_*` — события самой оболочки (детектор игр), а не кадр сокета.
+            if (!String(data?.type || '').startsWith('native_')) this.noteNativeFrame();
+            return this.dispatchRealtimeEvent(data);
+        });
         this.bus.registerCommand('zali_interface', E.TENOR_RESOLVED || 'tenor_resolved', (payload) => this.onTenorResolved(payload));
         this.bus.registerCommand('zali_interface', E.AUTH_RESPONSE || 'auth_response', (payload) => this.onNativeAuthResponse(payload));
         this.bus.registerCommand('zali_interface', E.NATIVE_RESPONSE || 'native_response', (payload) => this.onNativeResponse(payload));

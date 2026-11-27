@@ -401,6 +401,9 @@ struct OutTrack {
     ts_offset: i128,
     last_out: Option<(u64, Instant)>,
     last_switch: Option<Instant>,
+    /// Когда зрителю ушёл первый кадр нового слоя (старт дорожки или переключение). PLI зрителя
+    /// в первые секунды после этого — досинхронизация, а не признак перегрузки.
+    synced_at: Option<Instant>,
     /// С какого момента текущий слой не помещается в оценку канала зрителя.
     over_budget_since: Option<Instant>,
     codec_mismatch_logged: bool,
@@ -740,6 +743,9 @@ struct Engine {
 /// (прогон 2026-11-22: проба подняла оценку до 9,45, требовалось 10,5). После перехода оценку
 /// ведёт уже настоящий трафик, перелёт ловят понижение с выдержкой и потери.
 const UPGRADE_MARGIN: f64 = 1.03;
+
+/// Сколько после первого кадра нового слоя PLI зрителя считаются досинхронизацией.
+const PLI_SETTLE: Duration = Duration::from_secs(3);
 
 /// Ранжирование слоёв: q < h < f (так их называет клиент); прочее — по битрейту.
 fn layer_rank(rid: Option<Rid>) -> u8 {
@@ -1704,6 +1710,7 @@ impl Engine {
             ts_offset: 0,
             last_out: None,
             last_switch: None,
+            synced_at: None,
             over_budget_since: None,
             codec_mismatch_logged: false,
         });
@@ -2052,15 +2059,25 @@ impl Engine {
                 let Some(i) = self.session_index(sub) else {
                     return;
                 };
-                self.sessions[i].viewer_plis.push_back(Instant::now());
-                let Some((src, src_mid, rid)) = self.sessions[i]
+                let now = Instant::now();
+                let Some((src, src_mid, rid, settling)) = self.sessions[i]
                     .tracks
                     .iter()
                     .find(|t| t.mid() == Some(mid_out))
-                    .map(|t| (t.src_session, t.src_mid, t.target_rid.or(t.rid)))
+                    .map(|t| {
+                        // Пока слой не начал уходить или в первые секунды после ключевого кадра
+                        // нового слоя зритель досинхронизируется и просит ключевые кадры сам
+                        // (прогон 2026-11-27: серия PLI начиналась через 0,5 с после любого
+                        // переключения) — это не перегрузка и в счёт серии не идёт.
+                        let settling = !t.started || t.synced_at.is_some_and(|at| now.duration_since(at) < PLI_SETTLE);
+                        (t.src_session, t.src_mid, t.target_rid.or(t.rid), settling)
+                    })
                 else {
                     return;
                 };
+                if !settling {
+                    self.sessions[i].viewer_plis.push_back(now);
+                }
                 if let Some(j) = self.session_index(src) {
                     self.sessions[j].ask_keyframe(src_mid, rid, false);
                 }
@@ -2138,6 +2155,7 @@ impl Engine {
                         }
                         t.rid = t.target_rid;
                         t.started = true;
+                        t.synced_at = Some(now);
                         // У слоя свои RTP-таймстампы: стыкуем с отправленным по часам.
                         t.ts_offset = Self::continuity_offset(t.last_out, &data, now);
                     } else if !(t.started && data.rid == t.rid) {
@@ -2275,23 +2293,40 @@ impl Engine {
             // Серия PLI (3+ за 10 с) при 5 % потерь на прогоне 2026-11-22 означала фриз около
             // секунды на каждые 5 с на 1080p60: держать верхний слой там хуже, чем уйти ниже —
             // меньше пакетов на кадр, меньше невосстановимых кадров, легче ключевой кадр.
-            let pli_storm = s.viewer_plis.len() >= 3;
+            // Серия PLI — довод «слой слишком тяжёл» только пока есть куда падать. Зритель на
+            // нижнем слое (q) с серией PLI при 0 % потерь и оценке в десятки Мбит/с (TRUE_ADAM,
+            // 2026-11-27: 3–5 PLI в секунду на q) ничего не выигрывает от паузы роста: слой ниже
+            // некуда, а пауза каждую секунду продлевалась и удваивалась (10 → 60 с за 4 с) —
+            // зритель сидел на 480×270 всю демонстрацию. Такая серия слой не выбирает.
+            let can_step_down = s.tracks.iter().any(|t| {
+                t.kind == MediaKind::Video && matches!(t.state, TrackState::Open(_)) && t.started && layer_rank(t.rid) > 0 && t.rid.is_some()
+            });
+            let storm_raw = s.viewer_plis.len() >= 3;
+            if storm_raw && !can_step_down {
+                debug!("[SFU] pli storm viewer={} plis={} на нижнем слое — игнорируем", s.user, s.viewer_plis.len());
+                s.viewer_plis.clear();
+            }
+            let pli_storm = storm_raw && can_step_down;
             if s.pli_penalty_until.is_some_and(|t| now.duration_since(t.min(now)) > Duration::from_secs(60)) {
                 s.pli_penalty = Duration::from_secs(10);
             }
             if pli_storm {
-                // Серия, пришедшая вскоре после прошлого штрафа, — раскачка (проба подняла,
-                // снова фризы): пауза вдвое длиннее.
-                let recent = s.pli_penalty_until.is_some_and(|t| now < t + Duration::from_secs(30));
-                if recent {
-                    s.pli_penalty = (s.pli_penalty * 2).min(Duration::from_secs(60));
+                let in_penalty = s.pli_penalty_until.is_some_and(|t| now < t);
+                // Пауза растёт и продлевается один раз на серию: пока прошлый штраф идёт, новые
+                // серии (зритель ещё не доехал вниз) его не продлевают. Серия сразу после
+                // окончания штрафа — раскачка (проба подняла, снова фризы): пауза вдвое длиннее.
+                if !in_penalty {
+                    let recent = s.pli_penalty_until.is_some_and(|t| now < t + Duration::from_secs(30));
+                    if recent {
+                        s.pli_penalty = (s.pli_penalty * 2).min(Duration::from_secs(60));
+                    }
+                    s.probe_backoff = (s.probe_backoff * 2).min(Duration::from_secs(30));
+                    s.pli_penalty_until = Some(now + s.pli_penalty);
                 }
                 debug!("[SFU] pli storm viewer={} plis={} — вниз, пауза роста {}s", s.user, s.viewer_plis.len(), s.pli_penalty.as_secs());
-                s.probe_backoff = (s.probe_backoff * 2).min(Duration::from_secs(30));
                 s.proven_floor = 0.0;
                 s.trial = None;
                 s.viewer_plis.clear();
-                s.pli_penalty_until = Some(now + s.pli_penalty);
             }
             // Явная перегрузка канала зрителя (потери > 8 % до повторов) — та же пауза роста,
             // что и после серии PLI. Раньше при таких потерях сбрасывался только запас

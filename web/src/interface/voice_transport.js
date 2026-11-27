@@ -263,7 +263,7 @@ ZaliMixin(ZaliInterface, class {
             if ((this.voiceSocketLastInboundAt || 0) >= pingAt) return;
             this.voiceDiag('socket-probe-unanswered', { generation, reason, deadlineMs }, 'WARN');
             this.disconnectBrowserVoiceSocket();
-            this.setConnectionStatus(false);
+            this.setBrowserSocketStatus(false);
             void this.connectBrowserVoiceSocket();
         }, deadlineMs);
     }
@@ -319,7 +319,7 @@ ZaliMixin(ZaliInterface, class {
                 // Не через close(): у пути, умершего без FIN, закрывающее рукопожатие
                 // тоже не завершится, и onclose пришлось бы ждать долго.
                 this.disconnectBrowserVoiceSocket();
-                this.setConnectionStatus(false);
+                this.setBrowserSocketStatus(false);
             }
         }
         const current = this.voice.socket;
@@ -493,7 +493,7 @@ ZaliMixin(ZaliInterface, class {
                 // (messages + voice signaling both ride it — see onmessage below), so its
                 // lifecycle IS the connection-status badge in that mode, same as native
                 // shells driving it via SET_CONNECTION_STATUS over their own transport.
-                this.setConnectionStatus(true);
+                this.setBrowserSocketStatus(true);
                 // Серверу — смотрит ли пользователь в приложение: от этого зависит, уйдёт
                 // ли Web Push на это устройство (web_push.js, reportClientPresence).
                 this.reportClientPresence({ force: true });
@@ -595,7 +595,7 @@ ZaliMixin(ZaliInterface, class {
                     this.voiceSocketPingTimer = null;
                 }
                 this.voiceDiag('socket-close', { generation, url: url.toString(), roomId: this.voice.roomId || '', status: this.voice.status || '' }, 'WARN');
-                this.setConnectionStatus(false);
+                this.setBrowserSocketStatus(false);
                 if (!this.nativeSupports('voice')) {
                     const baseDelay = this.voiceSocketReconnectDelayMs || 1000;
                     const jitter = Math.floor(Math.random() * 500);

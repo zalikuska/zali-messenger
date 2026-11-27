@@ -549,6 +549,28 @@ ZaliMixin(ZaliInterface, class {
         this.scheduleRenderMessages();
     }
 
+    // Нативная оболочка сообщает о сокете только переходами (`set_connection_status`), без
+    // повтора и без опроса, а `loader.bus.send` до готовности страницы молча ничего не
+    // делает. Переход «подключено», пришедший, пока страница грузилась (запуск свёрнутым в
+    // трей, перезагрузка WebView), терялся навсегда: «Переподключение…» висело при живом
+    // соединении, а точек «в сети» у контактов не было — `S.wsOn` решает и то и другое.
+    // Любой кадр, дошедший от оболочки по её сокету, — доказательство, что сокет жив.
+    noteNativeFrame() {
+        if (this.S.wsOn === true) return;
+        if (!this.hasNativeBridge?.() || !this.S.session?.token) return;
+        this.trace?.(`native frame while wsOn=${String(this.S.wsOn)} — статус исправлен на «подключено»`);
+        this.setConnectionStatus(true);
+    }
+
+    // Браузерный сокет (voice_transport.js) ведёт индикатор только там, где нет оболочки.
+    // В Android-оболочке сообщения идут по её собственному сокету, а этот — запасной канал
+    // сигналинга звонков в WebView: он рвётся при уходе в фон чаще и раньше, и его обрыв
+    // гасил индикатор и точки у контактов при живом основном соединении.
+    setBrowserSocketStatus(connected) {
+        if (this.hasNativeBridge?.()) return;
+        this.setConnectionStatus(connected);
+    }
+
     setConnectionStatus(connected) {
         const wasOn = !!this.S.wsOn;
         this.S.wsOn = !!connected;

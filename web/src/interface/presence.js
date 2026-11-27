@@ -95,7 +95,9 @@ ZaliMixin(ZaliInterface, class {
     async refreshPresence() {
         this.installPresencePolling();
         if (this._presenceInFlight || this._presenceUnsupported) return;
-        if (!this.S.session?.token || !this.S.wsOn) return;
+        // Статус сокета ещё неизвестен (оболочка не успела сказать) — не повод жить без точек:
+        // сервер отдаёт снимок по HTTP. Не спрашиваем, только когда сокет точно лежит.
+        if (!this.S.session?.token || this.S.wsOn === false) return;
         this._presenceInFlight = true;
         try {
             const res = await this.apiFetch(this.apiRoutes.presence);
