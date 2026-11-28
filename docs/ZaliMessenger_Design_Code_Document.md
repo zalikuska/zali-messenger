@@ -128,6 +128,14 @@ flowchart LR
 
 Guest fallback разрешается только если включен `ALLOW_GUEST_MODE`.
 
+**Деньги не работают в гостевом режиме.** Для ZaliCoin (`coins.rs`), казны серверов
+(`treasury.rs`), розыгрышей (`raffles.rs`), казн аддонов и магазина аддонов
+(`addons.rs`, `addon_store.rs`) используется экстрактор `VerifiedUser`: он делит с
+`AuthenticatedUser` проверку токена, но без гостевого фолбэка, и анонимный запрос
+получает 401 даже при `ALLOW_GUEST_MODE=true`. Сервер, который слушает не loopback,
+с `ALLOW_GUEST_MODE=true` вообще не стартует (`guest_mode_bind_allowed`; для локальной
+отладки — `ZALI_GUEST_MODE_I_UNDERSTAND=true`). Тест — `tests/guest_money.rs`.
+
 ## 6. Модель данных
 
 ### 6.1 Основные сущности

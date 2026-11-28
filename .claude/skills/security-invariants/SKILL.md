@@ -87,6 +87,13 @@ Origin pin не защищает от фрейма, который собира�
   Сервер пишет предупреждение при каждом старте. В `.env.example` значение по
   умолчанию было `true` до 2026-08-22 — проверять env боевого сервера (см.
   `CLAUDE.local.md`).
+  **Деньги гостю недоступны:** любой хендлер, который двигает монеты (`coins.rs`,
+  `treasury.rs`, `raffles.rs`, `addons.rs`, `addon_store.rs`), берёт экстрактор
+  `VerifiedUser` (`auth.rs`, без гостевого фолбэка), а не `AuthenticatedUser`. Новый
+  денежный маршрут — тоже `VerifiedUser`; проверяют `tests/guest_money.rs` (список
+  денежных маршрутов дополнять там же) и `security_doctor` (`money handlers never take
+  the guest-capable extractor`). Сервер не стартует с `ALLOW_GUEST_MODE=true` на не-loopback
+  `BIND_ADDR`/сокете systemd (`guest_mode_bind_allowed`, обход — `ZALI_GUEST_MODE_I_UNDERSTAND=true`).
 - `null` в `ALLOWED_ORIGINS` отфильтровывается на старте: это origin
   песочничного iframe, `data:`- и `file:`-документа, а CORS работает с
   `allow_credentials(true)`. В `.env.example` он тоже стоял.

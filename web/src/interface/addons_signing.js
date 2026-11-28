@@ -12,7 +12,10 @@
 //
 // Официальная подпись — по заявке на конкретную сборку: оператор сервера
 // рассматривает её вручную, и только после одобрения сервер выдаёт подпись
-// именно этому файлу. Новая версия — новая заявка.
+// именно этому файлу. Новая версия — новая заявка. Кнопка «Отправить на проверку»
+// (из карточки подписанного файла) шлёт на сервер сам файл: оператор его смотрит, а
+// одобрение одним действием подписывает сборку официально и выкладывает в магазин
+// (server/src/addon_store.rs: submit / finalize_submission).
 //
 // Подписавший становится владельцем: видит установки и запуски (счётчиками, без
 // имён) и управляет казной аддона — выводит то, что внесено больше недели назад.
@@ -54,7 +57,7 @@ ZaliMixin(ZaliInterface, class {
             if (action === 'pick') document.getElementById('addonSignFileInput')?.click();
             else if (action === 'sign') void this.signPickedAddon('self');
             else if (action === 'sign-official') void this.signPickedAddon('official');
-            else if (action === 'request-official') void this.requestOfficialForPicked();
+            else if (action === 'request-official' || action === 'submit-review') void this.requestOfficialForPicked();
             else if (action === 'download') this.downloadSignedAddon();
             else if (action === 'install') void this.installSignedAddon();
             else if (action === 'reset') this.resetAddonSigning();
@@ -248,43 +251,85 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    /** Заявка на официальную подпись этой сборки; решает оператор сервера вручную. */
+    /**
+     * «Отправить на проверку»: переход от самоподписи к официальной. Файл уходит
+     * оператору; после одобрения сервер сам подписывает его официально и (если
+     * отмечено) выкладывает в магазин. Без галочки магазина — заявка только на подпись.
+     */
     async requestOfficialForPicked() {
         const st = this.addonSigningState();
         const info = st.info;
         if (!info || st.busy) return;
         const m = info.manifest;
+        // Аддон уже официальный: это обновление. Оно всегда идёт в магазин вместо текущей
+        // версии, а цена по умолчанию остаётся прежней.
+        const item = Array.isArray(st.mine) ? st.mine.find(a => a.id === m.id) : null;
+        const isUpdate = item?.kind === 'official';
+        const listed = item?.store || null;
+        const startPrice = isUpdate && listed ? Math.max(0, Math.floor(Number(listed.price) || 0)) : 0;
+        const title = isUpdate ? 'Отправить обновление' : 'Отправить на проверку';
+        const desc = isUpdate
+            ? `Оператор сервера вручную проверит новую версию: манифест, разрешения и код. После одобрения сервер сам подпишет её официально и заменит${listed ? ` версию ${this.esc(listed.version)}` : ' текущую'} в магазине. Пока идёт проверка, у всех остаётся прежняя версия.`
+            : 'Оператор сервера вручную проверит эту сборку: манифест, разрешения и код. После одобрения она получит официальную подпись. Одобряется именно эта версия файла: для новой версии заявка подаётся заново.';
         const html = `
             <div class="addon-dialog-head">
                 <div>
-                    <h2 id="addonDialogTitle">Официальная подпись</h2>
+                    <h2 id="addonDialogTitle">${title}</h2>
                     <p class="addon-dialog-sub">«${this.esc(m.name)}» ${this.esc(m.version)}</p>
                 </div>
             </div>
-            <p class="addon-dialog-desc">Заявку рассматривает оператор сервера вручную. Одобряется именно эта версия файла: для новой версии заявка подаётся заново.</p>
-            <textarea class="settings-input addon-request-note" rows="3" maxlength="500" placeholder="Что делает аддон и зачем ему официальная подпись (необязательно)"></textarea>
+            <p class="addon-dialog-desc">${desc}</p>
+            ${isUpdate ? '' : `<label class="store-dialog-field store-dialog-check">
+                <input type="checkbox" data-submit-store checked>
+                <span>Выложить в магазин сразу после одобрения</span>
+            </label>`}
+            <label class="store-dialog-field" data-submit-price-field>
+                <span>Цена в магазине, ZaliCoin (0 — бесплатно)</span>
+                <input type="number" inputmode="numeric" min="0" max="10000" step="1" value="${this.esc(String(startPrice))}" data-submit-price>
+            </label>
+            <textarea class="settings-input addon-request-note" rows="3" maxlength="500" placeholder="${isUpdate ? 'Что изменилось в этой версии (необязательно)' : 'Что делает аддон (необязательно)'}"></textarea>
             <div class="coin-transfer-actions">
                 <button class="btn-flat" type="button" data-dialog-action="cancel">Отмена</button>
-                <button class="auth-btn primary" type="button" data-dialog-action="ok">Отправить заявку</button>
+                <button class="auth-btn primary" type="button" data-dialog-action="ok">${title}</button>
             </div>`;
         const closed = this.openAddonDialog(html);
-        const note = Array.from(document.querySelectorAll('.addon-dialog')).pop()?.querySelector('textarea');
+        const dialog = Array.from(document.querySelectorAll('.addon-dialog')).pop();
+        const note = dialog?.querySelector('textarea');
+        const storeBox = dialog?.querySelector('[data-submit-store]');
+        const priceInput = dialog?.querySelector('[data-submit-price]');
+        const priceField = dialog?.querySelector('[data-submit-price-field]');
+        storeBox?.addEventListener('change', () => { if (priceField) priceField.hidden = !storeBox.checked; });
         if (await closed !== 'ok') return;
+        const toStore = isUpdate || !!storeBox?.checked;
+        const price = Math.floor(Number(priceInput?.value || 0));
+        if (toStore && (!Number.isSafeInteger(price) || price < 0 || price > 10000)) {
+            st.error = 'Цена — целое число ZaliCoin от 0 до 10 000';
+            this.renderHubSigning();
+            return;
+        }
         st.busy = true;
         st.error = '';
         this.renderHubSigning();
         try {
-            const res = await this.apiFetch(`/api/addons/${encodeURIComponent(m.id)}/official-request`, {
-                method: 'POST',
-                body: JSON.stringify({ version: m.version, digest: st.digest, note: String(note?.value || '') }),
-                interactive: true,
-            });
+            const res = toStore
+                ? await this.apiFetch('/api/addons/store/submit', {
+                    method: 'POST',
+                    body: JSON.stringify({ fileBase64: this.addonBytesToBase64(info.bytes), price, note: String(note?.value || '') }),
+                    interactive: true,
+                })
+                : await this.apiFetch(`/api/addons/${encodeURIComponent(m.id)}/official-request`, {
+                    method: 'POST',
+                    body: JSON.stringify({ version: m.version, digest: st.digest, note: String(note?.value || '') }),
+                    interactive: true,
+                });
             let body = null;
             try { body = await res.json(); } catch (e) { /* пустой ответ */ }
             if (!res.ok) throw new Error(String(body?.message || `Сервер отказал (${res.status})`));
+            // Эту сборку оператор уже одобрял: сервер выложил её сразу.
+            if (body?.status === 'published') void this.loadStore?.({ force: true });
             await this.loadMyAddons();
         } catch (error) {
-            st.error = `Не удалось отправить заявку: ${error?.message || error}`;
+            st.error = `${isUpdate ? 'Не удалось отправить обновление' : 'Не удалось отправить на проверку'}: ${error?.message || error}`;
         } finally {
             st.busy = false;
             this.renderHubSigning();
@@ -343,8 +388,18 @@ ZaliMixin(ZaliInterface, class {
     addonRequestLine(request, { digest = '' } = {}) {
         if (!request || (digest && request.digest !== digest)) return '';
         const v = this.esc(request.version);
-        if (request.status === 'pending') return `Заявка на официальную подпись ${v} ждёт решения`;
-        if (request.status === 'approved') return `Заявка ${v} одобрена — можно получить официальную подпись`;
+        // Заявка «на проверку и в магазин»: оператор видит сам файл, выкладка — автоматом.
+        const toStore = request.storePrice !== undefined && request.storePrice !== null;
+        if (request.status === 'pending') {
+            return toStore
+                ? `Версия ${v} на проверке: после одобрения получит официальную подпись и появится в магазине`
+                : `Заявка на официальную подпись ${v} ждёт решения`;
+        }
+        if (request.status === 'approved') {
+            return toStore
+                ? `Версия ${v} одобрена, подписана официально и выложена в магазин`
+                : `Заявка ${v} одобрена — можно получить официальную подпись`;
+        }
         if (request.status === 'rejected') {
             return request.decisionNote ? `Заявка ${v} отклонена: ${this.esc(request.decisionNote)}` : `Заявка ${v} отклонена`;
         }
@@ -394,7 +449,7 @@ ZaliMixin(ZaliInterface, class {
             const owner = String(info?.signature?.owner || '');
             const text = info?.signature?.state === 'official' && owner && owner !== String(this.myName() || '')
                 ? `Подпись выдана @${this.esc(owner)} — в магазин выкладывает только он.`
-                : 'В магазин попадают только официально подписанные аддоны: подайте заявку на официальную подпись, и после одобрения аддон можно выложить прямо здесь.';
+                : 'В магазин попадают только официально подписанные аддоны: нажмите «Отправить на проверку» — после одобрения оператором сборка получит официальную подпись и сама появится в магазине.';
             return `<p class="addon-sign-hint store-publish-hint">${text}</p>`;
         }
         const m = source.manifest;
@@ -537,12 +592,21 @@ ZaliMixin(ZaliInterface, class {
         let picked = '';
         if (st.result) {
             const m = st.result.manifest;
+            // Самоподписанному файлу — путь к официальной подписи: отправить на проверку.
+            const doneItem = mine ? mine.find(a => a.id === m.id) : null;
+            const doneRequest = doneItem?.officialRequest || null;
+            const donePending = !!doneRequest && doneRequest.digest === st.digest && doneRequest.status === 'pending';
+            const canUpgrade = st.result.kind !== 'official' && !!st.info && doneItem?.kind !== 'official' && !donePending;
+            const doneLine = this.addonRequestLine(doneRequest, { digest: st.digest });
+            const doneBusy = st.busy ? ' disabled aria-busy="true"' : '';
             picked = `<div class="addon-sign-card is-done" role="status">
                 <div class="addon-sign-card-text">
                     <strong>«${this.esc(m.name)}» ${this.esc(m.version)} подписан${st.result.kind === 'official' ? ' официально' : ''}</strong>
                     <span>Файл <code>${this.esc(st.result.fileName)}</code> сохранён и закреплён за @${this.esc(this.myName())}. Раздавайте именно его.</span>
+                    ${doneLine ? `<span class="addon-sign-hint">${doneLine}</span>` : ''}
                 </div>
                 <div class="addon-sign-actions">
+                    ${canUpgrade ? `<button class="auth-btn primary" type="button" data-sign-action="submit-review"${doneBusy}>Отправить на проверку</button>` : ''}
                     <button class="btn-flat" type="button" data-sign-action="install">Установить</button>
                     <button class="btn-flat" type="button" data-sign-action="download">Сохранить ещё раз</button>
                     <button class="btn-flat" type="button" data-sign-action="reset">Другой файл</button>
@@ -562,7 +626,8 @@ ZaliMixin(ZaliInterface, class {
                 && String(st.info.signature.owner || '') === String(this.myName() || '');
             const hint = signedOfficially
                 ? 'Файл уже подписан официально — раздавайте его как есть или выложите в магазин ниже.'
-                : (!item ? 'Подпись закрепит этот id за вашим аккаунтом.' : '');
+                : (!item ? 'Подпись закрепит этот id за вашим аккаунтом.'
+                    : (isOfficial ? `Аддон уже официальный: новая версия ${m.version} пойдёт на проверку и после одобрения заменит текущую в магазине.` : ''));
             const busy = st.busy ? ' disabled aria-busy="true"' : '';
             let actions;
             if (signedOfficially) {
@@ -570,10 +635,16 @@ ZaliMixin(ZaliInterface, class {
             } else if (approved) {
                 actions = `<button class="auth-btn primary" type="button" data-sign-action="sign-official"${busy}>${st.busy ? 'Подписываем…' : 'Получить официальную подпись'}</button>
                     <button class="btn-flat" type="button" data-sign-action="sign"${busy}>Самоподпись</button>`;
+            } else if (isOfficial) {
+                // Официальному аддону новая версия нужна только в виде заявки: самоподпись
+                // официальный id понизить не может.
+                actions = pending
+                    ? ''
+                    : `<button class="auth-btn primary" type="button" data-sign-action="submit-review"${busy}>${st.busy ? 'Отправляем…' : 'Отправить обновление'}</button>`;
             } else {
                 actions = `<button class="auth-btn primary" type="button" data-sign-action="sign"${busy}>${st.busy ? 'Подписываем…' : 'Подписать'}</button>`;
                 if (item && !isOfficial && !pending) {
-                    actions += `<button class="btn-flat" type="button" data-sign-action="request-official"${busy}>Запросить официальную</button>`;
+                    actions += `<button class="btn-flat" type="button" data-sign-action="submit-review"${busy}>Отправить на проверку</button>`;
                 }
             }
             picked = `<div class="addon-sign-card" data-sign-addon="${this.esc(m.id)}">
@@ -614,7 +685,7 @@ ZaliMixin(ZaliInterface, class {
             mineHtml = mine.map((a) => {
                 const t = a.treasury || {};
                 const official = a.kind === 'official';
-                const requestLine = official ? '' : this.addonRequestLine(a.officialRequest);
+                const requestLine = official && a.officialRequest?.status === 'approved' ? '' : this.addonRequestLine(a.officialRequest);
                 return `<article class="addon-mine" data-sign-addon="${this.esc(a.id)}">
                     <span class="hub-addon-icon" aria-hidden="true">${this.esc(String(a.name || a.id).trim().charAt(0).toUpperCase() || '?')}</span>
                     <div class="addon-mine-main">
@@ -858,9 +929,12 @@ ZaliMixin(ZaliInterface, class {
     handleAddonOfficialRealtime(payload) {
         const status = String(payload?.status || '');
         const text = status === 'approved'
-            ? `Заявка на официальную подпись ${payload.addonId} одобрена — получите подпись во вкладке «Подпись аддонов»`
+            ? (payload.published
+                ? `Аддон ${payload.addonId} одобрен: подписан официально и выложен в магазин`
+                : `Заявка на официальную подпись ${payload.addonId} одобрена — получите подпись во вкладке «Подпись аддонов»`)
             : `Заявка на официальную подпись ${payload.addonId} отклонена${payload.note ? `: ${payload.note}` : ''}`;
         this.setAddonsStatus?.(text, status === 'approved' ? 'success' : 'error');
+        if (payload?.published) void this.loadStore?.({ force: true });
         void this.loadMyAddons();
     }
 });

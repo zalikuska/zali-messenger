@@ -22,7 +22,7 @@
 use crate::{
     can_access_channel, channel_belongs_to_server, get_server_accessibility, get_server_member_role,
     resolve_server_message_viewers, run_immediate_tx, send_payload_to_user, trim_limited, AppState,
-    AuthenticatedUser, CoinTxOutcome, ZALICOIN_TOTAL_SUPPLY,
+    VerifiedUser, CoinTxOutcome, ZALICOIN_TOTAL_SUPPLY,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -329,7 +329,7 @@ impl CoinTxOutcome for CreateOutcome {
 
 /// `POST /api/raffles` — создать розыгрыш; монетные призы замораживаются.
 pub(crate) async fn create_raffle(
-    AuthenticatedUser(creator): AuthenticatedUser,
+    VerifiedUser(creator): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<RaffleCreateRequest>,
 ) -> impl IntoResponse {
@@ -487,7 +487,7 @@ pub(crate) struct LookupQuery {
 /// `GET /api/raffles?ids=` — состояние карточек розыгрышей, которые клиент
 /// рисует. Чужие каналы пропускаются, будто розыгрыша нет.
 pub(crate) async fn lookup_raffles(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<LookupQuery>,
 ) -> impl IntoResponse {
@@ -536,7 +536,7 @@ pub(crate) async fn lookup_raffles(
 /// `GET /api/raffles/mine` — активные розыгрыши создателя: замороженное всегда
 /// можно найти и отменить, даже если сообщение с карточкой не дошло.
 pub(crate) async fn my_raffles(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     sweep_due(&state).await;
@@ -567,7 +567,7 @@ pub(crate) async fn my_raffles(
 
 /// `POST /api/raffles/:id/join` — «Участвую». Один раз на аккаунт.
 pub(crate) async fn join_raffle(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
@@ -637,7 +637,7 @@ impl CoinTxOutcome for CancelOutcome {
 /// `POST /api/raffles/:id/cancel` — создатель отменяет до итога; заморозка
 /// возвращается целиком.
 pub(crate) async fn cancel_raffle(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {

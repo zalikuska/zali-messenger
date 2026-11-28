@@ -202,3 +202,7 @@ path = "../tests/history_recovery.rs"
 # что и почему, в PATCHES.md форка. Отдельный репозиторий, закреплён по коммиту.
 [patch.crates-io]
 str0m = { git = "https://github.com/zalikuska/str0m-zali", rev = "d22d5e01cb859f1bade7e2b49c1b0488c1767c6b" }
+
+[[test]]
+name = "guest_money"
+path = "../tests/guest_money.rs"

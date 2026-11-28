@@ -25,6 +25,8 @@ addon_official_key.pem
 *.db-shm
 *.db-wal
 uploads/
+addon_pending/
+addon_store/
 server.log
 *.log
 

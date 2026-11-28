@@ -230,6 +230,13 @@ impl Config {
         self
     }
 
+    /// Включает гостевой режим в обход `from_env` (и его запрета на не-loopback):
+    /// только для тестов, что деньги гостю не доступны.
+    pub fn with_guest_mode(mut self, enabled: bool) -> Self {
+        self.allow_guest_mode = enabled;
+        self
+    }
+
     pub fn from_env() -> Self {
         let jwt_secret = std::env::var("JWT_SECRET").ok();
         let jwt_secret = match jwt_secret {
@@ -290,6 +297,18 @@ impl Config {
         let allow_guest_mode = std::env::var("ALLOW_GUEST_MODE")
             .map(|v| v.to_lowercase() == "true")
             .unwrap_or(false);
+        if allow_guest_mode && !guest_mode_bind_allowed() {
+            // Гостевой режим на сокете, видимом снаружи, — это анонимный вход под
+            // `Zalikus` для всего интернета. Отказ при старте, а не предупреждение:
+            // предупреждение уже однажды не помогло.
+            panic!(
+                "ALLOW_GUEST_MODE=true запрещён, когда сервер слушает не loopback \
+                 (BIND_ADDR={}). Поставьте ALLOW_GUEST_MODE=false; для локальной отладки \
+                 привяжите BIND_ADDR=127.0.0.1:… или явно задайте \
+                 ZALI_GUEST_MODE_I_UNDERSTAND=true",
+                std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000 (по умолчанию)".to_string())
+            );
+        }
         if allow_guest_mode {
             // Not a lax mode — a switch that turns every unauthenticated request
             // into the `Zalikus` account: reading its conversations, sending as it,
@@ -2175,6 +2194,17 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+    // Заявка «на проверку и в магазин»: вместе с ней на сервер уходит сам файл
+    // (addon_store::submit), а `store_price` ≥ 0 означает «после одобрения
+    // подписать официально и выложить». −1 — обычная заявка только на подпись.
+    sqlx::query("ALTER TABLE addon_official_requests ADD COLUMN store_price INTEGER NOT NULL DEFAULT -1")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE addon_official_requests ADD COLUMN store_summary TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await
+        .ok();
     // Установки, запуски и выданные подписи. Статистика автора считается отсюда.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS addon_events (
@@ -2406,6 +2436,28 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     moderation::spawn_worker(Arc::clone(&state));
     voice::spawn_sfu_relay(Arc::clone(&state), sfu_out_rx);
     state
+}
+
+/// Можно ли держать `ALLOW_GUEST_MODE=true` при текущей привязке: только на
+/// loopback-адресе из `BIND_ADDR` (сокет от systemd считается внешним) либо с явным
+/// подтверждением `ZALI_GUEST_MODE_I_UNDERSTAND=true`.
+pub(crate) fn guest_mode_bind_allowed() -> bool {
+    if std::env::var("ZALI_GUEST_MODE_I_UNDERSTAND")
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if std::env::var_os("LISTEN_FDS").is_some() {
+        return false;
+    }
+    match std::env::var("BIND_ADDR") {
+        Ok(raw) => raw
+            .parse::<SocketAddr>()
+            .map(|addr| addr.ip().is_loopback())
+            .unwrap_or(false),
+        Err(_) => false,
+    }
 }
 
 /// Builds the full route table wired to `state`, minus binding/serving —
@@ -2734,6 +2786,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/addons/store/publish",
             post(addon_store::publish).layer(DefaultBodyLimit::max(22 * 1024 * 1024 + 4096)),
         )
+        // Отправка на проверку: файл уходит оператору, после одобрения сервер сам
+        // подписывает его официально и выкладывает (addon_store::submit).
+        .route(
+            "/api/addons/store/submit",
+            post(addon_store::submit).layer(DefaultBodyLimit::max(22 * 1024 * 1024 + 4096)),
+        )
         .route("/api/addons/store/:id", axum::routing::delete(addon_store::unpublish))
         .route("/api/addons/store/:id/update", post(addon_store::update_listing))
         .route("/api/addons/store/:id/assets", get(addon_store::assets))
@@ -2746,6 +2804,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/addons/:id/official-request", post(addons::request_official))
         .route("/api/admin/addons/requests", get(addons::admin_list_requests))
         .route("/api/admin/addons/requests/decide", post(addons::admin_decide_request))
+        .route("/api/admin/addons/requests/file", get(addon_store::admin_request_file))
         .route("/api/admin/addons/revoke", post(addons::admin_revoke_build))
         .route("/api/addons/:id/manage", get(addons::manage_addon))
         .route("/api/addons/:id/unbind", post(addons::unbind_addon))

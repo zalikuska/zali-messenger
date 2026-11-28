@@ -48,7 +48,7 @@
 //!   пользователей автору не отдаются — кроме тех, кто перевёл ему деньги.
 
 use crate::{
-    is_valid_username, run_immediate_tx, send_json_to_user, trim_limited, AppState, AuthenticatedUser,
+    is_valid_username, run_immediate_tx, send_json_to_user, trim_limited, AppState, VerifiedUser,
     CoinTxOutcome, ZALICOIN_TOTAL_SUPPLY,
 };
 use axum::{
@@ -443,7 +443,7 @@ pub(crate) async fn get_signing_keys(State(state): State<Arc<AppState>>) -> impl
 /// `GET /api/addons/:id` — кому принадлежит аддон и чьим ключом подписан.
 pub(crate) async fn get_registry(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(viewer): AuthenticatedUser,
+    VerifiedUser(viewer): VerifiedUser,
     Path(addon_id): Path<String>,
 ) -> impl IntoResponse {
     if !valid_addon_id(&addon_id) {
@@ -498,7 +498,7 @@ pub(crate) struct SignRequest {
 /// от имени вошедшего аккаунта и закрепляет за ним `id`.
 pub(crate) async fn sign_addon(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Json(body): Json<SignRequest>,
 ) -> impl IntoResponse {
     let id = body.id.trim().to_string();
@@ -671,7 +671,7 @@ impl CoinTxOutcome for Registered {
 /// на том, кто её принёс.
 pub(crate) async fn register_official(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(_username): AuthenticatedUser,
+    VerifiedUser(_username): VerifiedUser,
     Json(body): Json<RegisterOfficialRequest>,
 ) -> impl IntoResponse {
     let sig = &body.signature;
@@ -805,8 +805,8 @@ pub(crate) async fn register_official(
 // Заявки на официальную подпись
 // ============================================================================
 
-const REQUEST_NOTE_MAX_CHARS: usize = 500;
-const MAX_PENDING_REQUESTS_PER_USER: i64 = 5;
+pub(crate) const REQUEST_NOTE_MAX_CHARS: usize = 500;
+pub(crate) const MAX_PENDING_REQUESTS_PER_USER: i64 = 5;
 
 /// Выдаёт официальную подпись одобренной сборке. Ключ — серверный, но только
 /// для (id, версия, отпечаток), которые оператор одобрил вручную.
@@ -849,16 +849,35 @@ async fn sign_official_build(
             "Эта сборка не одобрена для официальной подписи — подайте заявку на неё",
         ));
     }
+    match issue_official_signature(state, conn, username, id, version, digest, name, now).await? {
+        Ok(body) => Ok(Json(body).into_response()),
+        Err(response) => Ok(response),
+    }
+}
+
+/// Подписывает сборку официальным ключом и переводит `id` в официальные.
+/// Одобрение заявки проверяет вызывающий. Возвращает `{signature, registry}`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn issue_official_signature(
+    state: &Arc<AppState>,
+    conn: &mut SqliteConnection,
+    username: &str,
+    id: &str,
+    version: &str,
+    digest: &str,
+    name: &str,
+    now: i64,
+) -> Result<Result<Value, Response>, sqlx::Error> {
     let message = signature_message("official", id, version, username, digest, now);
     let signature = match state.addon_signer.sign_official(&message) {
         None => {
-            return Ok(addon_error(
+            return Ok(Err(addon_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "official_unavailable",
                 "Сервер пока не может выдавать официальные подписи — сборка одобрена, повторите позже",
-            ))
+            )))
         }
-        Some(Err(e)) => return Ok(internal("sign_official_build", e)),
+        Some(Err(e)) => return Ok(Err(internal("sign_official_build", e))),
         Some(Ok(signature)) => signature,
     };
     let official = official_public_key();
@@ -888,7 +907,7 @@ async fn sign_official_build(
         .execute(&mut *conn)
         .await?;
     info!("[ADDON] official signed id={} version={} owner={}", id, version, username);
-    Ok(Json(json!({
+    Ok(Ok(json!({
         "signature": {
             "zaliSignature": SIGNATURE_FILE_VERSION,
             "kind": "official",
@@ -902,8 +921,7 @@ async fn sign_official_build(
             "signature": B64.encode(&signature),
         },
         "registry": { "id": id, "owner": username, "kind": "official", "keyFingerprint": key_fp },
-    }))
-    .into_response())
+    })))
 }
 
 fn request_json(
@@ -935,7 +953,7 @@ pub(crate) struct OfficialRequestBody {
 /// сборку для официальной подписи. Рассматривает оператор вручную.
 pub(crate) async fn request_official(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(addon_id): Path<String>,
     Json(body): Json<OfficialRequestBody>,
 ) -> impl IntoResponse {
@@ -1004,7 +1022,8 @@ pub(crate) async fn request_official(
              VALUES (?, ?, ?, ?, ?, 'pending', '', ?, 0)
              ON CONFLICT(addon_id, digest) DO UPDATE SET
                 version = excluded.version, note = excluded.note, status = 'pending',
-                decision_note = '', created_at = excluded.created_at, decided_at = 0",
+                decision_note = '', created_at = excluded.created_at, decided_at = 0,
+                store_price = -1, store_summary = ''",
         )
         .bind(&addon_id)
         .bind(&version)
@@ -1041,8 +1060,9 @@ pub(crate) async fn admin_list_requests(
         return StatusCode::FORBIDDEN.into_response();
     }
     let status = q.status.as_deref().map(str::trim).unwrap_or("pending");
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, i64, i64)>(
-        "SELECT addon_id, version, digest, owner, note, status, decision_note, created_at, decided_at
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, i64, i64, i64, String)>(
+        "SELECT addon_id, version, digest, owner, note, status, decision_note, created_at, decided_at,
+                store_price, store_summary
          FROM addon_official_requests WHERE (? = 'all' OR status = ?)
          ORDER BY created_at DESC LIMIT 200",
     )
@@ -1052,9 +1072,14 @@ pub(crate) async fn admin_list_requests(
     .await;
     match rows {
         Ok(rows) => Json(json!({
-            "requests": rows.into_iter().map(|(addon_id, version, digest, owner, note, status, decision_note, created_at, decided_at)| {
+            "requests": rows.into_iter().map(|(addon_id, version, digest, owner, note, status, decision_note, created_at, decided_at, store_price, store_summary)| {
                 let mut v = request_json(&addon_id, &version, &digest, &status, &note, &decision_note, created_at, decided_at);
                 v["owner"] = json!(owner);
+                // Заявка «на проверку и в магазин»: у оператора есть файл, цена и описание.
+                if store_price >= 0 {
+                    v["storePrice"] = json!(store_price);
+                    v["storeSummary"] = json!(store_summary);
+                }
                 v
             }).collect::<Vec<_>>(),
             "signerReady": state.addon_signer.can_sign_official(),
@@ -1095,6 +1120,29 @@ pub(crate) async fn admin_decide_request(
     }
     let note = clean_line(&body.note, REQUEST_NOTE_MAX_CHARS);
     let now = now_ms();
+
+    // Заявка «на проверку и в магазин» (есть цена): одобрение ещё и подписывает
+    // сборку, и выкладывает её. Всё, что может помешать, проверяем до решения —
+    // иначе заявка стала бы «одобренной», а выложить нечем.
+    let intent = match sqlx::query_as::<_, (i64, String)>(
+        "SELECT store_price, store_summary FROM addon_official_requests WHERE addon_id = ? AND digest = ?",
+    )
+    .bind(&body.addon_id)
+    .bind(&digest)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(row) => row.filter(|(price, _)| *price >= 0),
+        Err(e) => return internal("admin_decide_request", e),
+    };
+    if status == "approved" && intent.is_some() && !state.addon_signer.can_sign_official() {
+        return addon_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "official_unavailable",
+            "На сервере нет официального ключа: одобрить и выложить сборку нельзя",
+        );
+    }
+
     let updated = sqlx::query_as::<_, (String, String)>(
         "UPDATE addon_official_requests SET status = ?, decision_note = ?, decided_at = ?
          WHERE addon_id = ? AND digest = ? RETURNING owner, version",
@@ -1109,16 +1157,40 @@ pub(crate) async fn admin_decide_request(
     match updated {
         Ok(Some((owner, version))) => {
             info!("[ADDON] official request id={} version={} -> {}", body.addon_id, version, status);
+            let mut published = false;
+            if let Some((price, summary)) = &intent {
+                if status == "approved" {
+                    let mut conn = match state.db.acquire().await {
+                        Ok(conn) => conn,
+                        Err(e) => return internal("admin_decide_request", e),
+                    };
+                    match crate::addon_store::finalize_submission(
+                        &state, &mut conn, &owner, &body.addon_id, &digest, *price, summary,
+                    )
+                    .await
+                    {
+                        Ok(Ok(_)) => published = true,
+                        // Заявка остаётся одобренной, файл — на месте: повторное одобрение доделает.
+                        Ok(Err(response)) => return response,
+                        Err(e) => return internal("admin_decide_request", e),
+                    }
+                } else {
+                    crate::addon_store::discard_pending(&state, &body.addon_id, &digest).await;
+                }
+            }
             send_json_to_user(
                 &state,
                 &owner,
                 json!({
                     "type": "addon_official", "addonId": body.addon_id, "version": version,
-                    "status": status, "note": note,
+                    "status": status, "note": note, "published": published,
                 }),
             )
             .await;
-            Json(json!({ "ok": true, "status": status, "owner": owner, "version": version })).into_response()
+            Json(json!({
+                "ok": true, "status": status, "owner": owner, "version": version, "published": published,
+            }))
+            .into_response()
         }
         Ok(None) => addon_error(StatusCode::NOT_FOUND, "not_found", "Такой заявки нет"),
         Err(e) => internal("admin_decide_request", e),
@@ -1288,7 +1360,7 @@ pub(crate) struct DepositRequest {
 pub(crate) async fn deposit(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(addon_id): Path<String>,
     Json(body): Json<DepositRequest>,
 ) -> impl IntoResponse {
@@ -1459,7 +1531,7 @@ pub(crate) struct WithdrawRequest {
 /// пролежало в казне дольше недели.
 pub(crate) async fn withdraw(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(addon_id): Path<String>,
     Json(body): Json<WithdrawRequest>,
 ) -> impl IntoResponse {
@@ -1642,7 +1714,7 @@ async fn apply_payout(
 /// ещё и то, что аддон решил ему выплатить).
 pub(crate) async fn payout(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(addon_id): Path<String>,
     Json(body): Json<WithdrawRequest>,
 ) -> impl IntoResponse {
@@ -1705,7 +1777,7 @@ pub(crate) struct EventRequest {
 /// Пишется только для аддонов из реестра: об остальных сервер ничего не знает.
 pub(crate) async fn record_event(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(addon_id): Path<String>,
     Json(body): Json<EventRequest>,
 ) -> impl IntoResponse {
@@ -1850,7 +1922,7 @@ impl CoinTxOutcome for UnbindOutcome {
 /// - официальный `id` отвязывает только оператор — владельцу нельзя.
 pub(crate) async fn unbind_addon(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(addon_id): Path<String>,
 ) -> impl IntoResponse {
     if !valid_addon_id(&addon_id) {
@@ -1925,7 +1997,7 @@ pub(crate) async fn unbind_addon(
 /// `GET /api/addons/:id/manage` — казна и статистика; только владельцу.
 pub(crate) async fn manage_addon(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(addon_id): Path<String>,
 ) -> impl IntoResponse {
     if !valid_addon_id(&addon_id) {
@@ -1987,7 +2059,7 @@ pub(crate) async fn manage_addon(
 /// `GET /api/addons/mine` — аддоны, закреплённые за аккаунтом, со сводкой.
 pub(crate) async fn list_mine(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
 ) -> impl IntoResponse {
     let result: Result<Response, sqlx::Error> = async {
         let mut conn = state.db.acquire().await?;
@@ -2003,15 +2075,19 @@ pub(crate) async fn list_mine(
             let summary = treasury_summary(&mut conn, &id, now).await?;
             let stats = stats_json(&mut conn, &id, now).await?;
             // Последняя заявка на официальную подпись — для строки в списке.
-            let request = sqlx::query_as::<_, (String, String, String, String, String, i64, i64)>(
-                "SELECT version, digest, status, note, decision_note, created_at, decided_at
+            let request = sqlx::query_as::<_, (String, String, String, String, String, i64, i64, i64)>(
+                "SELECT version, digest, status, note, decision_note, created_at, decided_at, store_price
                  FROM addon_official_requests WHERE addon_id = ? ORDER BY created_at DESC LIMIT 1",
             )
             .bind(&id)
             .fetch_optional(&mut *conn)
             .await?
-            .map(|(version, digest, status, note, decision_note, created_at, decided_at)| {
-                request_json(&id, &version, &digest, &status, &note, &decision_note, created_at, decided_at)
+            .map(|(version, digest, status, note, decision_note, created_at, decided_at, store_price)| {
+                let mut v = request_json(&id, &version, &digest, &status, &note, &decision_note, created_at, decided_at);
+                if store_price >= 0 {
+                    v["storePrice"] = json!(store_price);
+                }
+                v
             });
             let store = crate::addon_store::owner_summary(&mut conn, &id).await?;
             items.push(json!({

@@ -53,6 +53,15 @@ pub async fn spawn_app_with_data_dir(data_dir: PathBuf) -> TestApp {
     spawn_app_with_config(data_dir, zali_server::Config::from_env()).await
 }
 
+/// Сервер с включённым гостевым режимом (анонимный запрос = `Zalikus`).
+#[allow(dead_code)]
+pub async fn spawn_app_with_guest_mode() -> TestApp {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let data_dir: PathBuf =
+        std::env::temp_dir().join(format!("zali-server-test-{}-{}", std::process::id(), n));
+    spawn_app_with_config(data_dir, zali_server::Config::from_env().with_guest_mode(true)).await
+}
+
 /// Сервер с заданным RELEASE_ADMIN_TOKEN — для операторских эндпоинтов.
 #[allow(dead_code)]
 pub async fn spawn_app_with_admin_token(token: &str) -> TestApp {

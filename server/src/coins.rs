@@ -26,7 +26,7 @@
 use crate::{
     can_access_channel, channel_belongs_to_server, get_server_accessibility,
     get_server_member_role, resolve_server_message_viewers, send_payload_to_user, trim_limited,
-    AppState, AuthenticatedUser,
+    AppState, VerifiedUser,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -132,7 +132,7 @@ pub(crate) async fn load_held_by(pool: &SqlitePool, username: &str) -> i64 {
 }
 
 pub(crate) async fn get_coin_balance(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let balance = load_balance(&state.db, &username).await;
@@ -141,7 +141,7 @@ pub(crate) async fn get_coin_balance(
 }
 
 pub(crate) async fn get_coin_distribution(
-    _auth: AuthenticatedUser,
+    _auth: VerifiedUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let rows = sqlx::query_as::<_, (String, i64)>(
@@ -186,7 +186,7 @@ pub(crate) async fn get_coin_distribution(
 }
 
 pub(crate) async fn transfer_coins(
-    AuthenticatedUser(sender): AuthenticatedUser,
+    VerifiedUser(sender): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CoinTransferRequest>,
 ) -> impl IntoResponse {
@@ -318,7 +318,7 @@ impl CoinTxOutcome for TransferOutcome {
 }
 
 pub(crate) async fn get_coin_transfer(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(transfer_id): Path<String>,
 ) -> impl IntoResponse {
@@ -605,7 +605,7 @@ impl CoinTxOutcome for GiftCreateOutcome {
 }
 
 pub(crate) async fn create_coin_gift(
-    AuthenticatedUser(sender): AuthenticatedUser,
+    VerifiedUser(sender): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CoinGiftCreateRequest>,
 ) -> impl IntoResponse {
@@ -745,7 +745,7 @@ pub(crate) struct CoinGiftLookupQuery {
 /// канал запрашивающий видит (или которые он сам отправил) — остальные
 /// пропускаются, будто их нет.
 pub(crate) async fn lookup_coin_gifts(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<CoinGiftLookupQuery>,
 ) -> impl IntoResponse {
@@ -798,7 +798,7 @@ pub(crate) async fn lookup_coin_gifts(
 /// Активные карточки отправителя — чтобы удержанное всегда можно было вернуть,
 /// даже если сообщение с карточкой не дошло до чата или было удалено.
 pub(crate) async fn get_my_active_coin_gifts(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let ids: Vec<String> = match sqlx::query_scalar(
@@ -854,7 +854,7 @@ impl CoinTxOutcome for GiftClaimOutcome {
 }
 
 pub(crate) async fn claim_coin_gift(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(gift_id): Path<String>,
 ) -> impl IntoResponse {
@@ -1033,7 +1033,7 @@ impl CoinTxOutcome for GiftCancelOutcome {
 }
 
 pub(crate) async fn cancel_coin_gift(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(gift_id): Path<String>,
 ) -> impl IntoResponse {

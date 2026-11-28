@@ -9,7 +9,7 @@
 mod common;
 
 use base64::Engine;
-use common::{register_user, spawn_app, RegisteredUser, TestApp};
+use common::{register_user, spawn_app, spawn_app_with_admin_token, RegisteredUser, TestApp};
 use openssl::{
     ec::EcKey,
     ecdsa::EcdsaSig,
@@ -30,6 +30,26 @@ fn b64() -> base64::engine::general_purpose::GeneralPurpose {
 
 fn use_test_official_key() {
     std::env::set_var("ZALI_ADDON_OFFICIAL_PUBKEY", TEST_OFFICIAL_PUBLIC);
+    // Приватная часть — чтобы сервер мог подписать одобренную заявку сам.
+    let path = std::env::temp_dir().join(format!("zali-store-official-{}.pem", std::process::id()));
+    std::fs::write(&path, TEST_OFFICIAL_PEM).unwrap();
+    std::env::set_var("ZALI_ADDON_OFFICIAL_KEY_FILE", &path);
+}
+
+const OPERATOR_TOKEN: &str = "operator-test-token-0123456789";
+
+async fn operator(app: &TestApp, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
+    let mut request = app
+        .http
+        .request(method, app.url(path))
+        .header("Authorization", format!("Bearer {OPERATOR_TOKEN}"));
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status().as_u16();
+    let text = response.text().await.unwrap_or_default();
+    (status, serde_json::from_str(&text).unwrap_or(Value::Null))
 }
 
 /// Контейнер ZALIEXTN: см. docs/ADDONS.md, раздел 1.
@@ -300,4 +320,197 @@ async fn a_free_addon_is_taken_without_money_and_a_new_version_replaces_the_old_
     let (_, mine) = get(&app, &author, "/api/addons/mine").await;
     assert_eq!(mine["addons"][0]["store"]["status"], "active");
     assert_eq!(mine["addons"][0]["store"]["version"], "1.1.0");
+}
+
+/// Несподписанный (самоподпись живёт на сервере) файл автора.
+fn plain_addon(id: &str, version: &str, owner: &str, extra: &str) -> Vec<u8> {
+    let manifest = json!({
+        "zaliAddon": 1, "id": id, "name": "Проверяемая игра", "version": version,
+        "description": "Описание для проверки", "author": owner, "entry": "index.html",
+        "permissions": ["cache"],
+    })
+    .to_string();
+    build_container(id, &[
+        ("manifest.json", manifest.into_bytes()),
+        ("index.html", format!("<h1>{extra}</h1>").into_bytes()),
+    ])
+}
+
+async fn submit(app: &TestApp, user: &RegisteredUser, file: &[u8], price: i64) -> (u16, Value) {
+    post(app, user, "/api/addons/store/submit",
+        json!({ "fileBase64": b64().encode(file), "price": price, "note": "Прошу проверить" })).await
+}
+
+async fn decide(app: &TestApp, id: &str, digest: &str, decision: &str) -> (u16, Value) {
+    operator(app, Method::POST, "/api/admin/addons/requests/decide",
+        Some(json!({ "addonId": id, "digest": digest, "decision": decision, "note": "проверено" }))).await
+}
+
+#[tokio::test]
+async fn a_submitted_build_waits_for_the_operator_and_is_signed_and_published_only_on_approval() {
+    use_test_official_key();
+    let app = spawn_app_with_admin_token(OPERATOR_TOKEN).await;
+    let author = register_user(&app, "submitauth1", PASSWORD).await;
+    let other = register_user(&app, "submitother", PASSWORD).await;
+    let id = "org.example.review1";
+    let file = plain_addon(id, "1.0.0", "submitauth1", "a");
+    let digest = content_digest(&[
+        ("manifest.json", {
+            json!({
+                "zaliAddon": 1, "id": id, "name": "Проверяемая игра", "version": "1.0.0",
+                "description": "Описание для проверки", "author": "submitauth1", "entry": "index.html",
+                "permissions": ["cache"],
+            }).to_string().into_bytes()
+        }),
+        ("index.html", b"<h1>a</h1>".to_vec()),
+    ]);
+
+    // Аддона нет в реестре — сначала самоподпись (она закрепляет id).
+    assert_eq!(submit(&app, &author, &file, 0).await.1["code"], "not_registered");
+    let (status, body) = post(&app, &author, "/api/addons/sign",
+        json!({ "id": id, "version": "1.0.0", "digest": digest, "name": "Проверяемая игра" })).await;
+    assert_eq!(status, 200, "{}", body);
+
+    // Чужой аккаунт, кривая цена, мусор вместо файла.
+    assert_eq!(submit(&app, &other, &file, 0).await.0, 403);
+    assert_eq!(submit(&app, &author, &file, -5).await.1["code"], "bad_price");
+    assert_eq!(submit(&app, &author, b"not a zali", 0).await.1["code"], "bad_file");
+
+    // Заявка принята и ждёт: на витрине пусто, реестр остаётся самоподписью.
+    let (status, body) = submit(&app, &author, &file, 25).await;
+    assert_eq!(status, 201, "{}", body);
+    assert_eq!(body["status"], "pending");
+    assert_eq!(body["request"]["digest"], digest);
+    assert_eq!(get(&app, &other, "/api/addons/store").await.1["items"].as_array().unwrap().len(), 0);
+    assert_eq!(get(&app, &author, &format!("/api/addons/{id}")).await.1["kind"], "self");
+    let (_, mine) = get(&app, &author, "/api/addons/mine").await;
+    assert_eq!(mine["addons"][0]["officialRequest"]["status"], "pending");
+    assert_eq!(mine["addons"][0]["officialRequest"]["storePrice"], 25);
+
+    // Оператор видит заявку вместе с файлом; обычный пользователь — нет.
+    let (_, queue) = operator(&app, Method::GET, "/api/admin/addons/requests", None).await;
+    assert_eq!(queue["requests"][0]["storePrice"], 25);
+    let file_path = format!("/api/admin/addons/requests/file?addonId={id}&digest={digest}");
+    assert_eq!(get(&app, &author, &file_path).await.0, 403);
+    let (status, body) = operator(&app, Method::GET, &file_path, None).await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(b64().decode(body["fileBase64"].as_str().unwrap()).unwrap(), file);
+
+    // Одобрение подписывает официально и выкладывает.
+    let (status, body) = decide(&app, id, &digest, "approve").await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body["published"], true);
+    assert_eq!(get(&app, &author, &format!("/api/addons/{id}")).await.1["kind"], "official");
+    let (_, list) = get(&app, &other, "/api/addons/store").await;
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    assert_eq!(list["items"][0]["price"], 25);
+    assert_eq!(list["items"][0]["summary"], "Описание для проверки");
+    // Файл заявки убран, а выложенный файл несёт официальную подпись и проходит обычную публикацию.
+    assert_eq!(operator(&app, Method::GET, &file_path, None).await.0, 404);
+    let (status, body) = get(&app, &author, &format!("/api/addons/store/{id}/download")).await;
+    assert_eq!(status, 200, "{}", body);
+    let signed = b64().decode(body["dataBase64"].as_str().unwrap()).unwrap();
+    assert!(signed.windows(19).any(|w| w == b"zali-signature.json"));
+    let (status, body) = publish(&app, &author, &signed, 30).await;
+    assert_eq!(status, 201, "{}", body);
+    assert_eq!(body["listing"]["price"], 30);
+}
+
+/// Дайджест `plain_addon`: содержимое без файла подписи.
+fn plain_digest(id: &str, version: &str, owner: &str, extra: &str) -> String {
+    let manifest = json!({
+        "zaliAddon": 1, "id": id, "name": "Проверяемая игра", "version": version,
+        "description": "Описание для проверки", "author": owner, "entry": "index.html",
+        "permissions": ["cache"],
+    })
+    .to_string();
+    content_digest(&[("manifest.json", manifest.into_bytes()), ("index.html", format!("<h1>{extra}</h1>").into_bytes())])
+}
+
+#[tokio::test]
+async fn an_update_of_an_official_addon_goes_through_review_and_replaces_the_listing() {
+    use_test_official_key();
+    let app = spawn_app_with_admin_token(OPERATOR_TOKEN).await;
+    let author = register_user(&app, "updauth1", PASSWORD).await;
+    let buyer = register_user(&app, "updbuyer1", PASSWORD).await;
+    let other = register_user(&app, "updother1", PASSWORD).await;
+    let id = "org.example.update1";
+
+    // Первая версия: самоподпись, заявка, одобрение.
+    let v1 = plain_addon(id, "1.0.0", "updauth1", "a");
+    let d1 = plain_digest(id, "1.0.0", "updauth1", "a");
+    assert_eq!(post(&app, &author, "/api/addons/sign",
+        json!({ "id": id, "version": "1.0.0", "digest": d1, "name": "Проверяемая игра" })).await.0, 200);
+    assert_eq!(submit(&app, &author, &v1, 40).await.0, 201);
+    assert_eq!(decide(&app, id, &d1, "approve").await.0, 200);
+    assert_eq!(get(&app, &author, &format!("/api/addons/{id}")).await.1["kind"], "official");
+
+    // Обновление: чужой нельзя, ту же версию с другим кодом нельзя.
+    let v2 = plain_addon(id, "1.1.0", "updauth1", "b");
+    let d2 = plain_digest(id, "1.1.0", "updauth1", "b");
+    assert_eq!(submit(&app, &other, &v2, 0).await.0, 403);
+    let same_version = plain_addon(id, "1.0.0", "updauth1", "other-code");
+    assert_eq!(submit(&app, &author, &same_version, 40).await.1["code"], "same_version");
+
+    // Цену не указали — остаётся 40 из действующей карточки.
+    let (status, body) = post(&app, &author, "/api/addons/store/submit",
+        json!({ "fileBase64": b64().encode(&v2), "note": "Новая версия" })).await;
+    assert_eq!(status, 201, "{}", body);
+    assert_eq!(body["request"]["storePrice"], 40);
+
+    // До решения на витрине прежняя версия, аддон остаётся официальным.
+    let (_, list) = get(&app, &buyer, "/api/addons/store").await;
+    assert_eq!(list["items"][0]["version"], "1.0.0");
+    assert_eq!(get(&app, &author, &format!("/api/addons/{id}")).await.1["kind"], "official");
+    let (_, queue) = operator(&app, Method::GET, "/api/admin/addons/requests", None).await;
+    assert_eq!(queue["requests"][0]["version"], "1.1.0");
+
+    // Отказ ничего не меняет и убирает файл; исправленную сборку можно подать снова.
+    assert_eq!(decide(&app, id, &d2, "reject").await.1["published"], false);
+    assert_eq!(get(&app, &buyer, "/api/addons/store").await.1["items"][0]["version"], "1.0.0");
+    assert_eq!(submit(&app, &author, &v2, 40).await.0, 201);
+
+    // Одобрение подменяет карточку на новую версию.
+    let (status, body) = decide(&app, id, &d2, "approve").await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body["published"], true);
+    let (_, list) = get(&app, &buyer, "/api/addons/store").await;
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    assert_eq!(list["items"][0]["version"], "1.1.0");
+    assert_eq!(list["items"][0]["price"], 40);
+    let (status, body) = get(&app, &author, &format!("/api/addons/store/{id}/download")).await;
+    assert_eq!(status, 200, "{}", body);
+    let signed = b64().decode(body["dataBase64"].as_str().unwrap()).unwrap();
+    assert!(signed.windows(19).any(|w| w == b"zali-signature.json"));
+}
+
+#[tokio::test]
+async fn a_rejected_submission_publishes_nothing_and_drops_the_file() {
+    use_test_official_key();
+    let app = spawn_app_with_admin_token(OPERATOR_TOKEN).await;
+    let author = register_user(&app, "submitauth2", PASSWORD).await;
+    let other = register_user(&app, "submitother2", PASSWORD).await;
+    let id = "org.example.review2";
+    let file = plain_addon(id, "1.0.0", "submitauth2", "r");
+    let manifest = json!({
+        "zaliAddon": 1, "id": id, "name": "Проверяемая игра", "version": "1.0.0",
+        "description": "Описание для проверки", "author": "submitauth2", "entry": "index.html",
+        "permissions": ["cache"],
+    }).to_string();
+    let digest = content_digest(&[("manifest.json", manifest.into_bytes()), ("index.html", b"<h1>r</h1>".to_vec())]);
+    assert_eq!(post(&app, &author, "/api/addons/sign",
+        json!({ "id": id, "version": "1.0.0", "digest": digest, "name": "Проверяемая игра" })).await.0, 200);
+    assert_eq!(submit(&app, &author, &file, 0).await.0, 201);
+
+    let (status, body) = decide(&app, id, &digest, "reject").await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body["published"], false);
+    assert_eq!(get(&app, &other, "/api/addons/store").await.1["items"].as_array().unwrap().len(), 0);
+    assert_eq!(get(&app, &author, &format!("/api/addons/{id}")).await.1["kind"], "self");
+    let file_path = format!("/api/admin/addons/requests/file?addonId={id}&digest={digest}");
+    assert_eq!(operator(&app, Method::GET, &file_path, None).await.0, 404);
+    let (_, mine) = get(&app, &author, "/api/addons/mine").await;
+    assert_eq!(mine["addons"][0]["officialRequest"]["status"], "rejected");
+    // После отказа можно отправить исправленную сборку заново.
+    assert_eq!(submit(&app, &author, &file, 0).await.0, 201);
 }

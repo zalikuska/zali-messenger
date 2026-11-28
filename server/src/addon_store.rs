@@ -23,10 +23,11 @@
 //!   через мост всех оболочек. Потолок — 16 МиБ (формат допускает 32).
 
 use crate::addons::{
-    addon_error, clean_line, internal, load_registry, now_ms, official_public_key, signature_message,
-    valid_addon_id, valid_digest, valid_version, verify_es256,
+    addon_error, clean_line, internal, issue_official_signature, load_registry, now_ms, official_public_key,
+    signature_message, valid_addon_id, valid_digest, valid_version, verify_es256, MAX_PENDING_REQUESTS_PER_USER,
+    REQUEST_NOTE_MAX_CHARS,
 };
-use crate::{run_immediate_tx, send_json_to_user, AppState, AuthenticatedUser, CoinTxOutcome};
+use crate::{run_immediate_tx, send_json_to_user, AppState, VerifiedUser, CoinTxOutcome};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -457,7 +458,7 @@ pub(crate) struct PublishBody {
 /// `POST /api/addons/store/publish` — выложить (или обновить) аддон в магазине.
 pub(crate) async fn publish(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Json(body): Json<PublishBody>,
 ) -> impl IntoResponse {
     // До разбора 16 МБ и проверки подписи: лимит публикаций ниже считает только
@@ -497,125 +498,513 @@ pub(crate) async fn publish(
 
     let result: Result<Response, sqlx::Error> = async {
         let mut conn = state.db.acquire().await?;
-        let Some(registry) = load_registry(&mut conn, &verified.id).await? else {
-            return Ok(addon_error(StatusCode::NOT_FOUND, "not_registered", "Аддона нет в реестре — сначала подпишите его"));
+        let input = ListingInput {
+            username: &username,
+            verified: &verified,
+            bytes: &bytes,
+            price: body.price,
+            summary: &summary,
         };
-        if registry.owner != username || registry.kind != "official" {
+        match write_listing(&state, &mut conn, &input, true).await? {
+            Ok(row) => {
+                let sales = purchases_count(&mut conn, &verified.id).await?;
+                Ok((StatusCode::CREATED, Json(json!({ "listing": listing_json(&row, sales, true, &username) }))).into_response())
+            }
+            Err(response) => Ok(response),
+        }
+    }
+    .await;
+    result.unwrap_or_else(|e| internal("store publish", e))
+}
+
+struct ListingInput<'a> {
+    username: &'a str,
+    verified: &'a Verified,
+    bytes: &'a [u8],
+    price: i64,
+    summary: &'a str,
+}
+
+/// Кладёт проверенную сборку на витрину: файлы на диск, строка в БД, событие.
+/// `enforce_hourly` — лимит публикаций в час; для публикации по решению
+/// оператора он не нужен (автор ничего не «спамит»).
+async fn write_listing(
+    state: &Arc<AppState>,
+    conn: &mut SqliteConnection,
+    input: &ListingInput<'_>,
+    enforce_hourly: bool,
+) -> Result<Result<ListingRow, Response>, sqlx::Error> {
+    let ListingInput { username, verified, bytes, price, summary } = *input;
+    let Some(registry) = load_registry(conn, &verified.id).await? else {
+        return Ok(Err(addon_error(StatusCode::NOT_FOUND, "not_registered", "Аддона нет в реестре — сначала подпишите его")));
+    };
+    if registry.owner != username || registry.kind != "official" {
+        return Ok(Err(addon_error(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "Публиковать может только владелец официально подписанного аддона",
+        )));
+    }
+    let revoked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM addon_revocations WHERE addon_id = ? AND digest = ?")
+        .bind(&verified.id)
+        .bind(&verified.digest)
+        .fetch_one(&mut *conn)
+        .await?;
+    if revoked > 0 {
+        return Ok(Err(addon_error(StatusCode::FORBIDDEN, "revoked", "Эта сборка отозвана — выпустите новую версию")));
+    }
+    let now = now_ms();
+    if enforce_hourly {
+        let recent: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM addon_events WHERE username = ? AND kind = 'store_publish' AND at > ?",
+        )
+        .bind(username)
+        .bind(now - 3_600_000)
+        .fetch_one(&mut *conn)
+        .await?;
+        if recent >= PUBLISH_PER_HOUR {
+            return Ok(Err(addon_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Слишком много публикаций за час")));
+        }
+    }
+    let existing = load_listing(conn, &verified.id).await?;
+    if existing.is_none() {
+        let mine: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM addon_store_listings WHERE owner = ?")
+            .bind(username)
+            .fetch_one(&mut *conn)
+            .await?;
+        if mine >= LISTINGS_PER_USER {
+            return Ok(Err(addon_error(StatusCode::BAD_REQUEST, "too_many", "В магазине может быть не больше 50 ваших аддонов")));
+        }
+    }
+
+    // Сначала файлы, потом строка: строка без файла была бы битой витриной.
+    let dir = store_dir(state, &verified.id);
+    if let Err(e) = write_atomic(&dir.join(format!("{}.zali", verified.digest)), bytes).await {
+        return Ok(Err(internal("store publish write", e)));
+    }
+    let icon_ext = match &verified.icon {
+        Some((ext, data)) => {
+            if let Err(e) = write_atomic(&dir.join(format!("{}.icon", verified.digest)), data).await {
+                return Ok(Err(internal("store publish icon", e)));
+            }
+            ext.clone()
+        }
+        None => String::new(),
+    };
+    let bg_ext = match &verified.background {
+        Some((ext, data)) => {
+            if let Err(e) = write_atomic(&dir.join(format!("{}.bg", verified.digest)), data).await {
+                return Ok(Err(internal("store publish background", e)));
+            }
+            ext.clone()
+        }
+        None => String::new(),
+    };
+
+    sqlx::query(
+        "INSERT INTO addon_store_listings
+            (addon_id, owner, version, digest, name, summary, author, permissions, price, size,
+             published_at, updated_at, status, icon_ext, bg_ext)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+         ON CONFLICT(addon_id) DO UPDATE SET
+            owner = excluded.owner, version = excluded.version, digest = excluded.digest,
+            name = excluded.name, summary = excluded.summary, author = excluded.author,
+            permissions = excluded.permissions, price = excluded.price, size = excluded.size,
+            updated_at = excluded.updated_at, status = 'active',
+            icon_ext = excluded.icon_ext, bg_ext = excluded.bg_ext",
+    )
+    .bind(&verified.id)
+    .bind(username)
+    .bind(&verified.version)
+    .bind(&verified.digest)
+    .bind(&verified.name)
+    .bind(summary)
+    .bind(&verified.author)
+    .bind(serde_json::to_string(&verified.permissions).unwrap_or_else(|_| "[]".into()))
+    .bind(price)
+    .bind(bytes.len() as i64)
+    .bind(now)
+    .bind(now)
+    .bind(&icon_ext)
+    .bind(&bg_ext)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("INSERT INTO addon_events (addon_id, username, kind, version, at) VALUES (?, ?, 'store_publish', ?, ?)")
+        .bind(&verified.id)
+        .bind(username)
+        .bind(&verified.version)
+        .bind(now)
+        .execute(&mut *conn)
+        .await?;
+
+    // Старые сборки этого аддона на диске больше не нужны.
+    if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(&verified.digest) {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
+    }
+    info!(
+        "[ADDON] store publish id={} version={} owner={} price={}",
+        verified.id, verified.version, username, price
+    );
+    let row = load_listing(conn, &verified.id).await?.expect("listing just written");
+    Ok(Ok(row))
+}
+
+// ============================================================================
+// Отправка на проверку: файл → оператор → официальная подпись → магазин
+// ============================================================================
+
+/// Контейнер .zali (формат — docs/ADDONS.md, раздел 1; зеркало `build` из addon_format.js).
+fn build_container(id: &str, files: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let id_bytes = &id.as_bytes()[..id.len().min(255)];
+    let mut out = Vec::new();
+    out.extend_from_slice(MAGIC);
+    out.push(1);
+    out.push(id_bytes.len() as u8);
+    out.extend_from_slice(id_bytes);
+    out.push(5);
+    out.extend_from_slice(b"addon");
+    out.push(0);
+    out.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    for (name, data) in files {
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        out.extend_from_slice(data);
+    }
+    out
+}
+
+/// Файл, ждущий решения оператора. Лежит отдельно от витрины: пока заявку не
+/// одобрили, его не должен получить никто, кроме оператора.
+fn pending_path(state: &AppState, id: &str, digest: &str) -> PathBuf {
+    state.data_dir.join("addon_pending").join(id).join(format!("{digest}.zali"))
+}
+
+/// Удаляет файл заявки (отклонена или уже опубликована).
+pub(crate) async fn discard_pending(state: &AppState, id: &str, digest: &str) {
+    let path = pending_path(state, id, digest);
+    let _ = tokio::fs::remove_file(&path).await;
+    if let Some(dir) = path.parent() {
+        let _ = tokio::fs::remove_dir(dir).await;
+    }
+}
+
+/// id, версия и имя из манифеста — те же правила, что в `verify_build`.
+fn read_manifest(files: &[(String, Vec<u8>)]) -> Result<(String, String, String), (&'static str, String)> {
+    let bad = |msg: &str| Err(("bad_file", msg.to_string()));
+    let Some(raw) = find(files, "manifest.json") else {
+        return bad("В файле нет manifest.json");
+    };
+    if raw.len() > MANIFEST_MAX {
+        return bad("manifest.json больше 64 КБ");
+    }
+    let Ok(manifest) = serde_json::from_slice::<Value>(raw) else {
+        return bad("manifest.json — не JSON");
+    };
+    if manifest.get("zaliAddon").and_then(Value::as_i64) != Some(1) {
+        return bad("В манифесте нужно \"zaliAddon\": 1");
+    }
+    let id = text_of(&manifest, "id");
+    let version = text_of(&manifest, "version");
+    let name = clean_line(&text_of(&manifest, "name"), 64);
+    if !valid_addon_id(&id) || !valid_version(&version) || name.is_empty() {
+        return bad("В манифесте неверные id, name или version");
+    }
+    Ok((id, version, name))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SubmitBody {
+    #[serde(rename = "fileBase64")]
+    file_base64: String,
+    /// Не указана — у обновления сохраняется цена текущей карточки, у новинки 0.
+    #[serde(default)]
+    price: Option<i64>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    note: String,
+}
+
+/// `POST /api/addons/store/submit` — автор отправляет сборку на проверку. Файл
+/// остаётся на сервере до решения оператора; одобрение подписывает сборку
+/// официально и сразу выкладывает её в магазин (`finalize_submission`).
+pub(crate) async fn submit(
+    State(state): State<Arc<AppState>>,
+    VerifiedUser(username): VerifiedUser,
+    Json(body): Json<SubmitBody>,
+) -> impl IntoResponse {
+    if !crate::rate_allow(&state, format!("addon-submit-try:{}", username.to_lowercase()), 10) {
+        return addon_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Слишком много попыток. Повторите через минуту.");
+    }
+    if body.price.is_some_and(|price| !(0..=PRICE_MAX).contains(&price)) {
+        return addon_error(
+            StatusCode::BAD_REQUEST,
+            "bad_price",
+            &format!("Цена — от 0 (бесплатно) до {PRICE_MAX} ZaliCoin"),
+        );
+    }
+    let bytes = match B64.decode(body.file_base64.trim()) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => return addon_error(StatusCode::BAD_REQUEST, "bad_file", "Файл аддона не прочитан"),
+    };
+    // Запас под файл подписи, который сервер добавит при одобрении.
+    if bytes.len() + SIGNATURE_MAX > FILE_MAX {
+        return addon_error(StatusCode::BAD_REQUEST, "bad_file", "Файл слишком большой: нужен запас под подпись");
+    }
+    let files = match parse_container(&bytes) {
+        Ok(files) => files,
+        Err(e) => return addon_error(StatusCode::BAD_REQUEST, "bad_file", &format!("Файл не подошёл: {e}")),
+    };
+    let (id, version, _name) = match read_manifest(&files) {
+        Ok(v) => v,
+        Err((code, message)) => return addon_error(StatusCode::BAD_REQUEST, code, &message),
+    };
+    // Подпись внутри файла (самоподпись автора) в расчёт не идёт: отпечаток — это содержимое.
+    let digest = content_digest(&files);
+    let summary = match &body.summary {
+        Some(text) if !text.trim().is_empty() => clean_line(text, SUMMARY_MAX_CHARS),
+        _ => String::new(),
+    };
+    let note = clean_line(&body.note, REQUEST_NOTE_MAX_CHARS);
+    let now = now_ms();
+
+    let result: Result<Response, sqlx::Error> = async {
+        let mut conn = state.db.acquire().await?;
+        let Some(registry) = load_registry(&mut conn, &id).await? else {
             return Ok(addon_error(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "Публиковать может только владелец официально подписанного аддона",
+                StatusCode::NOT_FOUND,
+                "not_registered",
+                "Сначала подпишите аддон самоподписью — заявка подаётся на закреплённый за вами аддон",
             ));
+        };
+        if registry.owner != username {
+            return Ok(addon_error(StatusCode::FORBIDDEN, "forbidden", "Этот аддон закреплён за другим автором"));
         }
         let revoked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM addon_revocations WHERE addon_id = ? AND digest = ?")
-            .bind(&verified.id)
-            .bind(&verified.digest)
+            .bind(&id)
+            .bind(&digest)
             .fetch_one(&mut *conn)
             .await?;
         if revoked > 0 {
             return Ok(addon_error(StatusCode::FORBIDDEN, "revoked", "Эта сборка отозвана — выпустите новую версию"));
         }
-        let now = now_ms();
-        let recent: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM addon_events WHERE username = ? AND kind = 'store_publish' AND at > ?",
+        let existing = sqlx::query_as::<_, (String,)>(
+            "SELECT status FROM addon_official_requests WHERE addon_id = ? AND digest = ?",
         )
-        .bind(&username)
-        .bind(now - 3_600_000)
-        .fetch_one(&mut *conn)
-        .await?;
-        if recent >= PUBLISH_PER_HOUR {
-            return Ok(addon_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Слишком много публикаций за час"));
-        }
-        let existing = load_listing(&mut conn, &verified.id).await?;
-        if existing.is_none() {
-            let mine: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM addon_store_listings WHERE owner = ?")
-                .bind(&username)
-                .fetch_one(&mut *conn)
-                .await?;
-            if mine >= LISTINGS_PER_USER {
-                return Ok(addon_error(StatusCode::BAD_REQUEST, "too_many", "В магазине может быть не больше 50 ваших аддонов"));
+        .bind(&id)
+        .bind(&digest)
+        .fetch_optional(&mut *conn)
+        .await?
+        .map(|(status,)| status);
+        let approved_before = existing.as_deref() == Some("approved");
+        let listing = load_listing(&mut conn, &id).await?;
+        // Обновление уже официального аддона: тот же `id` и владелец, но другая версия.
+        // Одинаковый номер при другом коде запутал бы проверку «есть новее» у покупателей.
+        let is_update = registry.kind == "official";
+        if is_update && !approved_before {
+            let last_approved: Option<String> = sqlx::query_scalar(
+                "SELECT version FROM addon_official_requests
+                 WHERE addon_id = ? AND status = 'approved' ORDER BY decided_at DESC LIMIT 1",
+            )
+            .bind(&id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            let current = listing.as_ref().map(|l| l.2.clone()).or(last_approved);
+            if current.as_deref() == Some(version.as_str()) {
+                return Ok(addon_error(
+                    StatusCode::CONFLICT,
+                    "same_version",
+                    "Эта версия уже официальная — укажите в манифесте новый номер версии",
+                ));
             }
         }
-
-        // Сначала файлы, потом строка: строка без файла была бы битой витриной.
-        let dir = store_dir(&state, &verified.id);
-        if let Err(e) = write_atomic(&dir.join(format!("{}.zali", verified.digest)), &bytes).await {
-            return Ok(internal("store publish write", e));
-        }
-        let icon_ext = match &verified.icon {
-            Some((ext, data)) => {
-                if let Err(e) = write_atomic(&dir.join(format!("{}.icon", verified.digest)), data).await {
-                    return Ok(internal("store publish icon", e));
-                }
-                ext.clone()
-            }
-            None => String::new(),
+        // Цена и описание обновления по умолчанию переходят из действующей карточки.
+        let price = body.price.unwrap_or_else(|| listing.as_ref().map(|l| l.8).unwrap_or(0));
+        let summary = if summary.is_empty() {
+            listing.as_ref().map(|l| l.5.clone()).unwrap_or_default()
+        } else {
+            summary.clone()
         };
-        let bg_ext = match &verified.background {
-            Some((ext, data)) => {
-                if let Err(e) = write_atomic(&dir.join(format!("{}.bg", verified.digest)), data).await {
-                    return Ok(internal("store publish background", e));
-                }
-                ext.clone()
-            }
-            None => String::new(),
-        };
-
-        sqlx::query(
-            "INSERT INTO addon_store_listings
-                (addon_id, owner, version, digest, name, summary, author, permissions, price, size,
-                 published_at, updated_at, status, icon_ext, bg_ext)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-             ON CONFLICT(addon_id) DO UPDATE SET
-                owner = excluded.owner, version = excluded.version, digest = excluded.digest,
-                name = excluded.name, summary = excluded.summary, author = excluded.author,
-                permissions = excluded.permissions, price = excluded.price, size = excluded.size,
-                updated_at = excluded.updated_at, status = 'active',
-                icon_ext = excluded.icon_ext, bg_ext = excluded.bg_ext",
-        )
-        .bind(&verified.id)
-        .bind(&username)
-        .bind(&verified.version)
-        .bind(&verified.digest)
-        .bind(&verified.name)
-        .bind(&summary)
-        .bind(&verified.author)
-        .bind(serde_json::to_string(&verified.permissions).unwrap_or_else(|_| "[]".into()))
-        .bind(body.price)
-        .bind(bytes.len() as i64)
-        .bind(now)
-        .bind(now)
-        .bind(&icon_ext)
-        .bind(&bg_ext)
-        .execute(&mut *conn)
-        .await?;
-        sqlx::query("INSERT INTO addon_events (addon_id, username, kind, version, at) VALUES (?, ?, 'store_publish', ?, ?)")
-            .bind(&verified.id)
+        if existing.as_deref() != Some("pending") && !approved_before {
+            let pending: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM addon_official_requests WHERE owner = ? AND status = 'pending'",
+            )
             .bind(&username)
-            .bind(&verified.version)
-            .bind(now)
+            .fetch_one(&mut *conn)
+            .await?;
+            if pending >= MAX_PENDING_REQUESTS_PER_USER {
+                return Ok(addon_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "too_many_requests",
+                    "Уже есть пять заявок на рассмотрении — дождитесь решения",
+                ));
+            }
+        }
+
+        // Файл — на диск до строки в БД: заявка без файла нечего проверять.
+        if let Err(e) = write_atomic(&pending_path(&state, &id, &digest), &bytes).await {
+            return Ok(internal("store submit write", e));
+        }
+        if approved_before {
+            // Ровно эту сборку оператор уже одобрил — второй раз смотреть нечего.
+            sqlx::query(
+                "UPDATE addon_official_requests SET store_price = ?, store_summary = ?, version = ?
+                 WHERE addon_id = ? AND digest = ?",
+            )
+            .bind(price)
+            .bind(&summary)
+            .bind(&version)
+            .bind(&id)
+            .bind(&digest)
             .execute(&mut *conn)
             .await?;
-
-        // Старые сборки этого аддона на диске больше не нужны.
-        if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if !name.starts_with(&verified.digest) {
-                    let _ = tokio::fs::remove_file(entry.path()).await;
+            return Ok(match finalize_submission(&state, &mut conn, &username, &id, &digest, price, &summary).await? {
+                Ok(row) => {
+                    let sales = purchases_count(&mut conn, &id).await?;
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "status": "published", "listing": listing_json(&row, sales, true, &username) })),
+                    )
+                        .into_response()
                 }
-            }
+                Err(response) => response,
+            });
         }
-        info!(
-            "[ADDON] store publish id={} version={} owner={} price={}",
-            verified.id, verified.version, username, body.price
-        );
-        let row = load_listing(&mut conn, &verified.id).await?.expect("listing just written");
-        let sales = purchases_count(&mut conn, &verified.id).await?;
-        Ok((StatusCode::CREATED, Json(json!({ "listing": listing_json(&row, sales, true, &username) }))).into_response())
+        sqlx::query(
+            "INSERT INTO addon_official_requests
+                (addon_id, version, digest, owner, note, status, decision_note, created_at, decided_at,
+                 store_price, store_summary)
+             VALUES (?, ?, ?, ?, ?, 'pending', '', ?, 0, ?, ?)
+             ON CONFLICT(addon_id, digest) DO UPDATE SET
+                version = excluded.version, note = excluded.note, status = 'pending',
+                decision_note = '', created_at = excluded.created_at, decided_at = 0,
+                store_price = excluded.store_price, store_summary = excluded.store_summary",
+        )
+        .bind(&id)
+        .bind(&version)
+        .bind(&digest)
+        .bind(&username)
+        .bind(&note)
+        .bind(now)
+        .bind(price)
+        .bind(&summary)
+        .execute(&mut *conn)
+        .await?;
+        info!("[ADDON] store submit id={} version={} owner={} price={}", id, version, username, price);
+        Ok((
+            StatusCode::CREATED,
+            Json(json!({
+                "status": "pending",
+                "request": {
+                    "addonId": id, "version": version, "digest": digest, "status": "pending",
+                    "note": note, "decisionNote": "", "createdAt": now, "decidedAt": 0,
+                    "storePrice": price,
+                },
+            })),
+        )
+            .into_response())
     }
     .await;
-    result.unwrap_or_else(|e| internal("store publish", e))
+    result.unwrap_or_else(|e| internal("store submit", e))
+}
+
+/// Доводит одобренную заявку до витрины: подписывает сборку официальным ключом,
+/// кладёт подпись в файл и публикует. Идемпотентна: при сбое файл заявки
+/// остаётся, и повторное одобрение (или повторная отправка) доделает остальное.
+pub(crate) async fn finalize_submission(
+    state: &Arc<AppState>,
+    conn: &mut SqliteConnection,
+    owner: &str,
+    addon_id: &str,
+    digest: &str,
+    price: i64,
+    summary: &str,
+) -> Result<Result<ListingRow, Response>, sqlx::Error> {
+    let bad = |code: &'static str, message: &str, status: StatusCode| Ok(Err(addon_error(status, code, message)));
+    let bytes = match tokio::fs::read(pending_path(state, addon_id, digest)).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return bad(
+                "file_missing",
+                "Файла заявки на сервере нет — автору нужно отправить сборку заново",
+                StatusCode::CONFLICT,
+            )
+        }
+    };
+    let files = match parse_container(&bytes) {
+        Ok(files) => files,
+        Err(e) => return bad("bad_file", &format!("Файл заявки не разобран: {e}"), StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let (id, version, name) = match read_manifest(&files) {
+        Ok(v) => v,
+        Err((code, message)) => return bad(code, &message, StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    if id != addon_id || content_digest(&files) != digest {
+        return bad("bad_file", "Файл заявки не совпадает с заявкой", StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    match load_registry(conn, addon_id).await? {
+        Some(row) if row.owner == owner => {}
+        _ => return bad("forbidden", "Аддон закреплён за другим автором", StatusCode::FORBIDDEN),
+    }
+
+    let signed_at = now_ms();
+    let body = match issue_official_signature(state, conn, owner, &id, &version, digest, &name, signed_at).await? {
+        Ok(body) => body,
+        Err(response) => return Ok(Err(response)),
+    };
+    let mut signed: Vec<(String, Vec<u8>)> = files.into_iter().filter(|(n, _)| n != SIGNATURE_PATH).collect();
+    signed.push((SIGNATURE_PATH.to_string(), serde_json::to_vec(&body["signature"]).unwrap_or_default()));
+    let signed_bytes = build_container(&id, &signed);
+    if signed_bytes.len() > FILE_MAX {
+        return bad("bad_file", "С подписью файл больше 16 МБ", StatusCode::BAD_REQUEST);
+    }
+    // Перепроверяем собранное тем же кодом, что и обычная публикация.
+    let verified = match verify_build(&signed, owner) {
+        Ok(v) => v,
+        Err((code, message)) => return bad(code, &message, StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let summary = if summary.trim().is_empty() { verified.description.clone() } else { summary.to_string() };
+    let input = ListingInput { username: owner, verified: &verified, bytes: &signed_bytes, price, summary: &summary };
+    let row = match write_listing(state, conn, &input, false).await? {
+        Ok(row) => row,
+        Err(response) => return Ok(Err(response)),
+    };
+    discard_pending(state, addon_id, digest).await;
+    Ok(Ok(row))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RequestFileQuery {
+    #[serde(rename = "addonId")]
+    addon_id: String,
+    digest: String,
+}
+
+/// `GET /api/admin/addons/requests/file` — файл заявки для оператора
+/// (`RELEASE_ADMIN_TOKEN`): посмотреть манифест, разрешения и код до решения.
+pub(crate) async fn admin_request_file(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<RequestFileQuery>,
+) -> impl IntoResponse {
+    if !crate::operator_authorized(&state, &headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let digest = q.digest.trim().to_lowercase();
+    if !valid_addon_id(&q.addon_id) || !valid_digest(&digest) {
+        return addon_error(StatusCode::BAD_REQUEST, "bad_request", "Нужны addonId и digest");
+    }
+    match tokio::fs::read(pending_path(&state, &q.addon_id, &digest)).await {
+        Ok(bytes) => Json(json!({ "fileBase64": B64.encode(&bytes), "size": bytes.len() })).into_response(),
+        Err(_) => addon_error(StatusCode::NOT_FOUND, "not_found", "Файла этой заявки на сервере нет"),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -629,7 +1018,7 @@ pub(crate) struct UpdateBody {
 /// `POST /api/addons/store/:id/update` — владелец меняет цену и описание.
 pub(crate) async fn update_listing(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(id): Path<String>,
     Json(body): Json<UpdateBody>,
 ) -> impl IntoResponse {
@@ -676,7 +1065,7 @@ pub(crate) async fn update_listing(
 /// `DELETE /api/addons/store/:id` — снять с витрины. Купившие сохраняют доступ.
 pub(crate) async fn unpublish(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if !valid_addon_id(&id) {
@@ -715,7 +1104,7 @@ pub(crate) struct ListQuery {
 /// `GET /api/addons/store` — витрина: активные листинги и то, что уже ваше.
 pub(crate) async fn list_store(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Query(query): Query<ListQuery>,
 ) -> impl IntoResponse {
     let limit = query.limit.unwrap_or(LIST_LIMIT_MAX).clamp(1, LIST_LIMIT_MAX);
@@ -773,7 +1162,7 @@ pub(crate) async fn list_store(
 /// `GET /api/addons/store/:id/assets` — иконка и фон карточки как data-URL.
 pub(crate) async fn assets(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(_username): AuthenticatedUser,
+    VerifiedUser(_username): VerifiedUser,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if !valid_addon_id(&id) {
@@ -827,7 +1216,7 @@ impl CoinTxOutcome for BuyOutcome {
 /// `POST /api/addons/store/:id/buy` — купить (или забрать бесплатный) аддон.
 pub(crate) async fn buy(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if !valid_addon_id(&id) {
@@ -944,7 +1333,7 @@ impl CoinTxOutcome for WithOwner {
 /// `GET /api/addons/store/:id/download` — файл `.zali` тому, кто имеет на него право.
 pub(crate) async fn download(
     State(state): State<Arc<AppState>>,
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if !valid_addon_id(&id) {

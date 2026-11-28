@@ -42,7 +42,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         parts: &mut axum::http::request::Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let username = authenticate_parts(parts, state).await?;
+        let username = authenticate_parts(parts, state, true).await?;
         // Временные ограничения и приостановка аккаунта (moderation.rs): изменяющий
         // запрос отклоняется здесь, до любого обработчика. Чтение не проверяется.
         if let Some(code) =
@@ -54,9 +54,35 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
     }
 }
 
+/// Как `AuthenticatedUser`, но **без гостевого фолбэка**: допускает только запрос
+/// с настоящим токеном (Bearer, cookie, WS-тикет). Нужен каждому обработчику, который
+/// двигает деньги (ZaliCoin, казна сервера и аддонов, розыгрыши, магазин аддонов):
+/// при `ALLOW_GUEST_MODE=true` анонимный запрос иначе превращался бы в `Zalikus` со
+/// всем его балансом. Новый денежный хендлер берёт этот тип, а не `AuthenticatedUser`.
+pub(crate) struct VerifiedUser(pub(crate) String);
+
+#[axum::async_trait]
+impl axum::extract::FromRequestParts<Arc<AppState>> for VerifiedUser {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let username = authenticate_parts(parts, state, false).await?;
+        if let Some(code) =
+            crate::moderation::blocked_action(state, &username, &parts.method, parts.uri.path())
+        {
+            return Err((StatusCode::FORBIDDEN, code));
+        }
+        Ok(VerifiedUser(username))
+    }
+}
+
 async fn authenticate_parts(
     parts: &mut axum::http::request::Parts,
     state: &Arc<AppState>,
+    allow_guest: bool,
 ) -> Result<String, (StatusCode, &'static str)> {
     {
         async fn validate_token(token: &str, state: &Arc<AppState>) -> Result<String, StatusCode> {
@@ -161,7 +187,7 @@ async fn authenticate_parts(
         }
 
         // 2. Guest fallback only when explicitly enabled
-        if state.config.allow_guest_mode {
+        if allow_guest && state.config.allow_guest_mode {
             return Ok("Zalikus".to_string());
         }
 

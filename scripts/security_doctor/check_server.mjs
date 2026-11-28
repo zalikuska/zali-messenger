@@ -53,6 +53,14 @@ section('credentials');
     record('guest mode announces itself on every start',
         /if allow_guest_mode \{[\s\S]{0,900}?warn!\(/.test(lib),
         'it disables authentication outright — that must not be a quiet config line');
+    record('guest mode cannot start on a non-loopback bind',
+        /allow_guest_mode && !guest_mode_bind_allowed\(\)[\s\S]{0,200}?panic!/.test(lib),
+        'a startup warning did not stop it once; refuse to boot instead');
+    const moneyFiles = ['coins', 'treasury', 'raffles', 'addons', 'addon_store'];
+    const guestLeak = moneyFiles.filter((f) => /\bAuthenticatedUser\b/.test(stripLineComments(read(`server/src/${f}.rs`))));
+    record('money handlers never take the guest-capable extractor',
+        guestLeak.length === 0 && /fn authenticate_parts[\s\S]{0,200}?allow_guest: bool/.test(auth),
+        guestLeak.length ? `AuthenticatedUser still used in: ${guestLeak.join(', ')}` : 'use VerifiedUser for anything that moves coins');
     record('the `null` CORS origin is dropped',
         /eq_ignore_ascii_case\("null"\)/.test(lib),
         'null is what a sandboxed iframe, a data: document and a file: page all send');

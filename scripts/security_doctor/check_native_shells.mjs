@@ -105,7 +105,9 @@ section('Frame isolation (addon sandbox)');
         /fun documentStartScript\(\)[\s\S]{0,4000}?if \(window\.top !== window\) return;[\s\S]{0,400}?__ZALI_BRIDGE_NONCE__/.test(bridge),
         'addDocumentStartJavaScript(…, setOf("*")) runs it in every frame');
     record('Android: postMessage rejects calls without the bridge nonce',
-        /fun postMessage\(json: String\)[\s\S]{0,300}?bridgeNonceMatches\(/.test(bridge),
+        // Проверка живёт в dispatchMessage: postMessage только ставит вызов в очередь
+        // моста (bridgeExecutor), и сам dispatchMessage начинается с проверки nonce.
+        /fun postMessage\(json: String\)[\s\S]{0,600}?dispatchMessage\(json\)[\s\S]*?private fun dispatchMessage\([^)]*\)[\s\S]{0,300}?bridgeNonceMatches\(/.test(bridge),
         'addJavascriptInterface hands ZaliAndroidBridge to every frame');
     record('Android: nonce comes from SecureRandom', /bridgeNonce[\s\S]{0,120}?SecureRandom/.test(bridge));
     record('Android: advertises addonFrames', /addonFrames: true/.test(bridge));

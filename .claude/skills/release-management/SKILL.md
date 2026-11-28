@@ -50,6 +50,10 @@ Cargo требует строгий SemVer, поэтому `apps/windows/Cargo.t
 
 ## Шаги (кратко; команды — `ops/RELEASE.md`)
 
+**Браузерная версия — тоже часть релиза.** Любой релиз, менявший `web/src/`, `web/style.css`,
+`web/index.html` или протокол, требует выкладки `msg.zalikus.org/web/` (`ops/RELEASE.md` §2a,
+скилл `zali-ops-deploy`): апдейтер её не обновляет, и нативные сборки её не заменяют.
+
 1. Бамп версии во всех местах: `python3 scripts/bump_version.py <версия>`, затем `--check`
    (список мест — `CLAUDE.md` → «Коммиты и пуши»).
 2. Сборка клиента(ов) — `./scripts/build_app.sh` (macOS),

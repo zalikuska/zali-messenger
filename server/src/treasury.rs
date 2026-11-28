@@ -21,7 +21,7 @@
 
 use crate::{
     get_server_accessibility, get_server_member_role, run_immediate_tx, send_payload_to_user,
-    trim_limited, AppState, AuthenticatedUser, CoinTxOutcome, ZALICOIN_TOTAL_SUPPLY,
+    trim_limited, AppState, VerifiedUser, CoinTxOutcome, ZALICOIN_TOTAL_SUPPLY,
 };
 use axum::{
     extract::{Path, State},
@@ -786,7 +786,7 @@ async fn execute_treasury_move(state: &Arc<AppState>, mv: TreasuryMove) -> Respo
 /// Казна сервера: баланс и история видны всем участникам, роли и список
 /// участников (для выплат) — только тем, кто казной распоряжается.
 pub(crate) async fn get_server_treasury(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(server_id): Path<String>,
 ) -> impl IntoResponse {
@@ -902,7 +902,7 @@ pub(crate) struct TreasuryDepositRequest {
 }
 
 pub(crate) async fn deposit_to_treasury(
-    AuthenticatedUser(actor): AuthenticatedUser,
+    VerifiedUser(actor): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(server_id): Path<String>,
     Json(body): Json<TreasuryDepositRequest>,
@@ -986,7 +986,7 @@ pub(crate) struct TreasuryPayoutRequest {
 }
 
 pub(crate) async fn payout_from_treasury(
-    AuthenticatedUser(actor): AuthenticatedUser,
+    VerifiedUser(actor): VerifiedUser,
     State(state): State<Arc<AppState>>,
     Path(server_id): Path<String>,
     Json(body): Json<TreasuryPayoutRequest>,
@@ -1071,7 +1071,7 @@ pub(crate) async fn payout_from_treasury(
 /// Казны, которыми пользователь распоряжается, — источники для пополнения чужой
 /// казны деньгами сервера.
 pub(crate) async fn get_managed_treasuries(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let result: Result<Vec<serde_json::Value>, sqlx::Error> = async {
@@ -1106,7 +1106,7 @@ pub(crate) async fn get_managed_treasuries(
 
 /// Выплаты с серверов, пришедшие пользователю, — раздел «От серверов».
 pub(crate) async fn get_my_server_payouts(
-    AuthenticatedUser(username): AuthenticatedUser,
+    VerifiedUser(username): VerifiedUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let rows = sqlx::query_as::<_, (String, String, String, i64, String, String, String, String, String)>(

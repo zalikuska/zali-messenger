@@ -14,17 +14,25 @@
 
     python3 scripts/addon_review.py list                    # ожидающие
     python3 scripts/addon_review.py list --status all
+    python3 scripts/addon_review.py inspect ID DIGEST       # манифест, разрешения, файлы заявки
+    python3 scripts/addon_review.py fetch ID DIGEST [--out файл.zali]   # скачать файл на проверку
     python3 scripts/addon_review.py approve ID DIGEST [--note "…"]
     python3 scripts/addon_review.py reject  ID DIGEST --note "что поправить"
     python3 scripts/addon_review.py revoke  ID DIGEST --note "почему"   # отозвать сборку
     python3 scripts/addon_review.py restore ID DIGEST                   # снять отзыв
 
 DIGEST — отпечаток сборки из списка (хватит первых символов, если они однозначны).
+
+Заявка с пометкой «в магазин» пришла кнопкой «Отправить на проверку» — к ней приложен
+сам файл (inspect/fetch его показывают). `approve` такой заявки одним действием
+подписывает сборку официальным ключом и выкладывает её в магазин по цене автора;
+`reject` стирает файл. Обычная заявка (только подпись) файла не имеет.
 Для revoke/restore — полный отпечаток (64 hex): сборка не обязана быть в заявках.
 Отозванную сборку приложение не запускает, не даёт ей облака и вкладов в казну;
 вернуть свои монеты человек может всегда.
 """
 import argparse
+import base64
 import json
 import os
 import sys
@@ -72,7 +80,8 @@ def cmd_list(args):
         print('Заявок нет.')
         return
     for r in rows:
-        print(f"[{r['status']}] {r['addonId']} {r['version']} — @{r['owner']}, подана {when(r['createdAt'])}")
+        store = f" · в магазин, {r['storePrice']} ZC" if r.get('storePrice') is not None else ''
+        print(f"[{r['status']}] {r['addonId']} {r['version']} — @{r['owner']}, подана {when(r['createdAt'])}{store}")
         print(f"    digest {r['digest']}")
         if r.get('note'):
             print(f"    «{r['note']}»")
@@ -89,12 +98,46 @@ def resolve_digest(addon_id, prefix):
     return rows[0]['digest']
 
 
+def request_blob(addon_id, prefix):
+    digest = resolve_digest(addon_id, prefix)
+    res = api('/api/admin/addons/requests/file', {'addonId': addon_id, 'digest': digest})
+    return digest, base64.b64decode(res['fileBase64'])
+
+
+def cmd_fetch(args):
+    digest, blob = request_blob(args.id, args.digest)
+    out = args.out or f"{args.id}-{digest[:12]}.zali"
+    with open(out, 'wb') as fh:
+        fh.write(blob)
+    print(f"{out}: {len(blob)} байт")
+
+
+def cmd_inspect(args):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import addon_pack
+    digest, blob = request_blob(args.id, args.digest)
+    files = addon_pack.parse(blob)
+    manifest = json.loads(files['manifest.json'].decode('utf-8'))
+    addon_pack.describe(blob, manifest)
+    print(f"  автор в манифесте: {manifest.get('author', '—')}")
+    print(f"  описание: {manifest.get('description', '—')}")
+    for key in ('network', 'cloud'):
+        if manifest.get(key):
+            print(f"  {key}: {manifest[key]}")
+    print(f"  файлов: {len(files)}")
+    for name, data in sorted(files.items()):
+        print(f"    {len(data):>9}  {name}")
+    print("\nПосмотреть код целиком: fetch, затем распаковать и прочитать index.html и скрипты.")
+
+
 def cmd_decide(args, decision):
     digest = resolve_digest(args.id, args.digest)
     res = api('/api/admin/addons/requests/decide', body={
         'addonId': args.id, 'digest': digest, 'decision': decision, 'note': args.note or '',
     })
     print(f"{args.id} {res.get('version', '')} → {res.get('status')} (@{res.get('owner')})")
+    if res.get('published'):
+        print('  подписано официально и выложено в магазин')
 
 
 def cmd_revoke(args, restore):
@@ -112,6 +155,13 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     lst = sub.add_parser('list', help='очередь заявок')
     lst.add_argument('--status', default='pending', help='pending (по умолчанию), approved, rejected, all')
+    ins = sub.add_parser('inspect', help='манифест, разрешения и файлы заявки «в магазин»')
+    ins.add_argument('id')
+    ins.add_argument('digest')
+    fch = sub.add_parser('fetch', help='скачать файл заявки «в магазин»')
+    fch.add_argument('id')
+    fch.add_argument('digest')
+    fch.add_argument('--out', default='')
     for name in ('approve', 'reject'):
         p = sub.add_parser(name, help='одобрить' if name == 'approve' else 'отклонить')
         p.add_argument('id')
@@ -125,6 +175,10 @@ def main():
     args = parser.parse_args()
     if args.command == 'list':
         cmd_list(args)
+    elif args.command == 'inspect':
+        cmd_inspect(args)
+    elif args.command == 'fetch':
+        cmd_fetch(args)
     elif args.command in ('revoke', 'restore'):
         cmd_revoke(args, args.command == 'restore')
     else:

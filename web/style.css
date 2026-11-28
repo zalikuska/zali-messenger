@@ -22518,6 +22518,25 @@ body[data-decor-art="off"] .hub-action-art {
     font-weight: 700;
 }
 
+.store-dialog-field[hidden] { display: none; }
+
+/* Строка с галочкой: общий стиль поля растягивает input до 42px, а галочке нужен свой размер. */
+.store-dialog-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.store-dialog-check input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border-radius: 6px;
+    accent-color: var(--lime);
+}
+
 .store-link {
     padding: 0;
     border: 0;
